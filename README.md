@@ -19,7 +19,19 @@ pip install -r requirements.txt
 [ffmpeg](https://ffmpeg.org/download.html) 的 Windows 版，放到 PATH 里或用 `--mp3val` / `--ffmpeg` 指定路径。
 没有它们也能跑，只是跳过对应级别的流检查。
 
-## 用法
+## 图形界面（GUI）
+
+```bat
+python -m mp3organizer gui
+REM 或安装后直接运行： mp3tool-gui
+```
+
+界面里选好源文件夹和音乐库，勾选要做的步骤，点"开始处理"。
+默认是**试运行模式**（只生成报告不改文件），确认报告没问题后，
+去掉"试运行"勾选再跑一次正式执行。处理在后台线程进行，
+进度条和日志会实时更新；跑完点"打开 HTML 报告"看明细。
+
+## 用法（命令行）
 
 ```bat
 REM 先试运行，看报告，确认没问题再真正执行
@@ -45,8 +57,17 @@ python -m mp3organizer cover D:\音乐库 --min-score 0.75
 `--force-encoding gbk` 可强制指定标签编码（跳过自动检测）；
 `--encodings gbk,big5` 可调整自动尝试顺序（日韩收藏建议改顺序）。
 
-打包成单文件 exe：`pip install pyinstaller` 后 `pyinstaller --onefile -m mp3organizer`
-（或按 pyproject.toml 的 `mp3tool` 入口打包）。
+打包成单文件 exe：`pip install pyinstaller` 后
+
+```bat
+REM 命令行版
+pyinstaller --onefile --name mp3tool --paths src src/mp3organizer/cli.py
+REM 图形界面版（--windowed 去掉控制台黑窗口）
+pyinstaller --onefile --windowed --name MP3整理工具 --paths src src/mp3organizer/gui.py
+```
+
+mp3val.exe / ffmpeg.exe 如需随包分发，放到 exe 同目录即可（用 `--mp3val` /
+`--ffmpeg` 参数或 PATH 指定位置）。
 
 ## 安全说明
 

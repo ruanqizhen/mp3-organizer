@@ -118,43 +118,39 @@ def cmd_cover(args: argparse.Namespace) -> int:
 
 def cmd_all(args: argparse.Namespace) -> int:
     """完整流水线：编码修复 → 完整性检查（隔离损坏）→ 归类 → 封面 → 报告。"""
+    from .pipeline import run_pipeline, PHASE_NAMES
+
     encodings = tuple(args.encodings.split(",")) if args.encodings else CANDIDATE_ENCODINGS
-    records = []
-    for p in find_mp3_files(args.root):
-        rec: dict = {"path": str(p), "tag_changes": [], "new_path": ""}
-        info = read_info(p)
-        # 1. 编码修复
-        tag = fix_file(p, dry_run=args.dry_run, backup_dir=args.backup_dir,
-                       backup_root=args.root, encodings=encodings,
-                       force_encoding=args.force_encoding,
-                       guess_from_filename=args.guess_from_filename)
-        rec["tag_status"] = tag["status"]
-        rec["tag_changes"] = tag["changes"]
-        info = read_info(p)  # 用修复后的标签继续
-        # 2. 完整性
-        chk = check_file(p, mp3val_exe=args.mp3val, ffmpeg_exe=args.ffmpeg,
-                         fix=not args.no_fix)
-        rec["integrity_status"] = chk.status
-        if chk.status in ("broken", "unreadable"):
-            if not args.dry_run and args.quarantine_dir:
-                rec["new_path"] = str(quarantine(p, args.quarantine_dir)) + "（已隔离）"
-            rec["cover_status"] = "skipped"
-            records.append(rec)
-            print(f"[{tag['status']}/{chk.status}/skipped] {p}")
-            continue
-        # 3. 归类
-        org = organize_file(p, args.library, info, dry_run=args.dry_run)
-        rec["new_path"] = org["dest"]
-        target = Path(org["dest"]) if not args.dry_run else p
-        # 4. 封面
-        cov = process_file(target, info, min_score=args.min_score, dry_run=args.dry_run,
-                           cache_dir=args.cache_dir, backup_dir=args.backup_dir,
-                           backup_root=args.library)
-        rec["cover_status"] = cov["status"]
-        records.append(rec)
-        print(f"[{tag['status']}/{chk.status}/{cov['status']}] {p}")
-    print(f"处理完成：{len(records)} 个文件")
-    _emit_reports(records, args)
+
+    def _progress(i: int, total: int, phase: str, message: str) -> None:
+        if phase in ("tags", "integrity", "organize", "cover"):
+            return  # 每个文件只在完成时打印一行
+        if phase == "done":
+            print(message)
+
+    result = run_pipeline(
+        args.root, args.library,
+        dry_run=args.dry_run, backup_dir=args.backup_dir,
+        quarantine_dir=args.quarantine_dir, cache_dir=args.cache_dir,
+        encodings=encodings, force_encoding=args.force_encoding,
+        guess_from_filename=args.guess_from_filename,
+        fix_streams=not args.no_fix, mp3val_exe=args.mp3val, ffmpeg_exe=args.ffmpeg,
+        min_score=args.min_score, report_html=args.report, report_csv=args.report_csv,
+        progress=_progress,
+    )
+    for r in result["records"]:
+        print(f"[{r.get('tag_status')}/{r.get('integrity_status')}/{r.get('cover_status')}]"
+              f" {r['path']}")
+    if args.report:
+        print(f"HTML 报告: {args.report}")
+    if args.report_csv:
+        print(f"CSV 报告: {args.report_csv}")
+    return 0
+
+
+def cmd_gui(args: argparse.Namespace) -> int:
+    from .gui import main as gui_main
+    gui_main()
     return 0
 
 
@@ -202,6 +198,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="无标签时从文件名构建标签；有标签但标题/演唱者为空时补齐")
     s.add_argument("--min-score", type=float, default=0.75)
     s.add_argument("--cache-dir", default=None)
+
+    s = sub.add_parser("gui", help="启动图形界面")
     return p
 
 
@@ -213,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
             setattr(args, key, None)
     return {
         "scan": cmd_scan, "fix-tags": cmd_fix_tags, "organize": cmd_organize,
-        "check": cmd_check, "cover": cmd_cover, "all": cmd_all,
+        "check": cmd_check, "cover": cmd_cover, "all": cmd_all, "gui": cmd_gui,
     }[args.cmd](args)
 
 

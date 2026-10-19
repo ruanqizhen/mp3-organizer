@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 mp3tool = "mp3organizer.cli:main"
+mp3tool-gui = "mp3organizer.gui:main"
 
 [build-system]
 requires = ["setuptools>=61"]
