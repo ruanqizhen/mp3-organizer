@@ -1,0 +1,21 @@
+[project]
+name = "mp3-organizer"
+version = "0.1.0"
+description = "Windows 老 MP3 批量整理工具：编码修复、按类型/演唱者归类、完整性检查修复、自动嵌入专辑封面"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "mutagen>=1.45",
+    "musicbrainzngs>=0.7",
+    "requests>=2.28",
+]
+
+[project.scripts]
+mp3tool = "mp3organizer.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

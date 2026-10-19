@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+*.bak[0-9]*
+_backup/
+_quarantine/
+report.html
+report.csv

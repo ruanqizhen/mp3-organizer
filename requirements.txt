@@ -1,0 +1,3 @@
+mutagen>=1.45
+musicbrainzngs>=0.7
+requests>=2.28
