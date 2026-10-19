@@ -36,6 +36,7 @@ python -m mp3organizer all D:\老音乐 D:\音乐库 ^
 ```bat
 python -m mp3organizer scan D:\老音乐                 # 扫描列出
 python -m mp3organizer fix-tags D:\老音乐 --dry-run   # 只修标签
+python -m mp3organizer fix-tags D:\老音乐 --guess-from-filename  # 无标签时从文件名建标签
 python -m mp3organizer organize D:\老音乐 D:\音乐库   # 只归类
 python -m mp3organizer check D:\老音乐 --quarantine-dir D:\待处理
 python -m mp3organizer cover D:\音乐库 --min-score 0.75

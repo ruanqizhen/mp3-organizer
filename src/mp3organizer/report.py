@@ -13,10 +13,14 @@ HEADERS = ["文件", "编码修复", "标签改动", "完整性", "封面", "新
 def _fmt_changes(changes: list[dict]) -> str:
     if not changes:
         return "—"
-    return "<br>".join(
-        f"{html.escape(c['frame'])}: {html.escape(c['old'])} → {html.escape(c['new'])}"
-        for c in changes
-    )
+    parts = []
+    for c in changes:
+        mark = "（文件名猜测）" if c.get("guessed") else ""
+        parts.append(
+            f"{html.escape(c['frame'])}: {html.escape(c['old'])} → "
+            f"{html.escape(c['new'])}{mark}"
+        )
+    return "<br>".join(parts)
 
 
 def build_html(records: list[dict], out_path: str | Path) -> Path:

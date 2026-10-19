@@ -19,7 +19,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from mutagen.id3 import ID3, ID3NoHeaderError, Encoding
+from mutagen.id3 import ID3, ID3NoHeaderError, Encoding, TIT2, TPE1, TALB, TRCK
 
 CANDIDATE_ENCODINGS: tuple[str, ...] = ("gbk", "big5", "shift_jis", "euc-kr", "utf-8")
 
@@ -107,6 +107,55 @@ def _backup_copy(path: Path, backup_dir: Path, backup_root: Path | None = None) 
     return dest
 
 
+def _apply_guess(audio: ID3, guess: dict) -> list[dict]:
+    """把从文件名猜出的标签写入 audio（只填空字段，不覆盖已有值）。
+
+    返回 changes 记录，每条带 guessed=True 标记。
+    """
+    changes = []
+    for frame_id, key in (("TIT2", "title"), ("TPE1", "artist"),
+                          ("TALB", "album"), ("TRCK", "track")):
+        value = (guess.get(key) or "").strip()
+        if not value:
+            continue
+        frame = audio.get(frame_id)
+        current = ""
+        if frame is not None:
+            text = getattr(frame, "text", None)
+            if isinstance(text, list) and text and isinstance(text[0], str):
+                current = text[0].strip()
+        if current:
+            continue
+        cls = {"TIT2": TIT2, "TPE1": TPE1, "TALB": TALB, "TRCK": TRCK}[frame_id]
+        audio.add(cls(encoding=Encoding.UTF8, text=[value]))
+        changes.append({"frame": frame_id, "old": "", "new": value,
+                        "encoding": "filename", "guessed": True})
+    return changes
+
+
+def _build_tag_from_filename(
+    path: Path, result: dict, *, dry_run: bool,
+    backup_dir: str | Path | None, backup_root: str | Path | None,
+) -> dict:
+    """文件完全没有标签时，从文件名构建一个新标签。"""
+    from .filename_tags import guess_from_filename as _guess
+
+    guess = _guess(path)
+    if not guess["title"] and not guess["artist"]:
+        result["status"] = "no_tag"
+        result["error"] = "文件名无法解析出标题/演唱者"
+        return result
+    audio = ID3()
+    result["changes"] = _apply_guess(audio, guess)
+    result["status"] = "guessed"
+    if dry_run:
+        return result
+    if backup_dir is not None:
+        result["backup"] = str(_backup_copy(path, Path(backup_dir), backup_root))
+    audio.save(str(path), v2_version=4)
+    return result
+
+
 def fix_file(
     path: str | Path,
     *,
@@ -115,12 +164,15 @@ def fix_file(
     backup_root: str | Path | None = None,
     encodings: tuple[str, ...] = CANDIDATE_ENCODINGS,
     force_encoding: str | None = None,
+    guess_from_filename: bool = False,
 ) -> dict:
     """修复单个 MP3 的标签编码。
 
-    返回 dict：path / status（fixed|unchanged|no_tag|unreadable）/
-    changes（[{frame, old, new, encoding}]）/ backup / error。
+    返回 dict：path / status（fixed|guessed|unchanged|no_tag|unreadable）/
+    changes（[{frame, old, new, encoding[, guessed]}]）/ backup / error。
     dry_run=True 时只报告不写文件；backup_dir 指定时改写前先备份。
+    guess_from_filename=True 时：无标签则从文件名构建；有标签但标题/
+    演唱者为空时，从文件名补齐空字段（不覆盖已有值）。
     """
     path = Path(path)
     result: dict = {
@@ -133,6 +185,11 @@ def fix_file(
     try:
         audio = ID3(str(path))
     except ID3NoHeaderError:
+        if guess_from_filename:
+            return _build_tag_from_filename(
+                path, result, dry_run=dry_run,
+                backup_dir=backup_dir, backup_root=backup_root,
+            )
         result["status"] = "no_tag"
         return result
     except Exception as exc:  # noqa: BLE001 - 标签损坏形态各异，统一记录
@@ -166,6 +223,14 @@ def fix_file(
         if changed:
             frame.text = new_text
             frame.encoding = Encoding.UTF8
+
+    if not result["changes"] and guess_from_filename:
+        # 标签存在但标题/演唱者等为空，从文件名补齐（不覆盖已有值）
+        from .filename_tags import guess_from_filename as _guess
+
+        filled = _apply_guess(audio, _guess(path))
+        if filled:
+            result["changes"] = filled
 
     if not result["changes"]:
         return result

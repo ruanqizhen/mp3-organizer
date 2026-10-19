@@ -51,8 +51,9 @@ def cmd_fix_tags(args: argparse.Namespace) -> int:
     for p in find_mp3_files(args.root):
         r = fix_file(p, dry_run=args.dry_run, backup_dir=args.backup_dir,
                      backup_root=args.root, encodings=encodings,
-                     force_encoding=args.force_encoding)
-        n_fixed += r["status"] == "fixed"
+                     force_encoding=args.force_encoding,
+                     guess_from_filename=args.guess_from_filename)
+        n_fixed += r["status"] in ("fixed", "guessed")
         records.append({"path": r["path"], "tag_status": r["status"],
                         "tag_changes": r["changes"], "integrity_status": "",
                         "cover_status": "", "new_path": ""})
@@ -125,7 +126,8 @@ def cmd_all(args: argparse.Namespace) -> int:
         # 1. 编码修复
         tag = fix_file(p, dry_run=args.dry_run, backup_dir=args.backup_dir,
                        backup_root=args.root, encodings=encodings,
-                       force_encoding=args.force_encoding)
+                       force_encoding=args.force_encoding,
+                       guess_from_filename=args.guess_from_filename)
         rec["tag_status"] = tag["status"]
         rec["tag_changes"] = tag["changes"]
         info = read_info(p)  # 用修复后的标签继续
@@ -168,6 +170,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(s)
     s.add_argument("--encodings", default=None, help="尝试顺序，如 gbk,big5")
     s.add_argument("--force-encoding", default=None, help="强制指定编码，如 gbk")
+    s.add_argument("--guess-from-filename", action="store_true",
+                   help="无标签时从文件名构建标签；有标签但标题/演唱者为空时补齐")
 
     s = sub.add_parser("organize", help="按类型/演唱者归类到音乐库")
     _add_common(s)
@@ -194,6 +198,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--ffmpeg", default="auto")
     s.add_argument("--encodings", default=None)
     s.add_argument("--force-encoding", default=None)
+    s.add_argument("--guess-from-filename", action="store_true",
+                   help="无标签时从文件名构建标签；有标签但标题/演唱者为空时补齐")
     s.add_argument("--min-score", type=float, default=0.75)
     s.add_argument("--cache-dir", default=None)
     return p

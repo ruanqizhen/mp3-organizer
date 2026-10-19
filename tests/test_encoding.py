@@ -83,3 +83,49 @@ def test_fix_file_no_tag(tmp_path):
     p = tmp_path / "d.mp3"
     p.write_bytes(b"\x00" * 64)
     assert fix_file(p)["status"] == "no_tag"
+
+
+def test_fix_file_guess_from_filename_no_tag(tmp_path):
+    from mp3organizer.encoding import fix_file
+    p = tmp_path / "周杰伦 - 夜曲.mp3"
+    p.write_bytes(b"\x00" * 64)  # 无标签
+    res = fix_file(p, guess_from_filename=True)
+    assert res["status"] == "guessed"
+    assert all(c.get("guessed") for c in res["changes"])
+    reread = ID3(str(p))
+    assert reread["TIT2"].text == ["夜曲"]
+    assert reread["TPE1"].text == ["周杰伦"]
+
+
+def test_fix_file_guess_disabled_stays_no_tag(tmp_path):
+    from mp3organizer.encoding import fix_file
+    p = tmp_path / "周杰伦 - 夜曲.mp3"
+    p.write_bytes(b"\x00" * 64)
+    assert fix_file(p)["status"] == "no_tag"
+
+
+def test_fix_file_fill_missing_artist(tmp_path):
+    from mp3organizer.encoding import fix_file
+    p = tmp_path / "周杰伦 - 夜曲.mp3"
+    tag = ID3()
+    tag.add(TIT2(encoding=Encoding.UTF8, text=["夜曲"]))
+    tag.save(str(p))
+    res = fix_file(p, guess_from_filename=True)
+    assert res["status"] == "fixed"
+    assert reread_artist(p) == "周杰伦"
+    # 已有标题不被覆盖
+    assert ID3(str(p))["TIT2"].text == ["夜曲"]
+
+
+def reread_artist(p):
+    return ID3(str(p))["TPE1"].text[0]
+
+
+def test_fix_file_guess_dry_run(tmp_path):
+    from mp3organizer.encoding import fix_file
+    p = tmp_path / "周杰伦 - 夜曲.mp3"
+    p.write_bytes(b"\x00" * 64)
+    before = p.read_bytes()
+    res = fix_file(p, guess_from_filename=True, dry_run=True)
+    assert res["status"] == "guessed"
+    assert p.read_bytes() == before
