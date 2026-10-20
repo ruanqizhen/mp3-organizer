@@ -110,3 +110,72 @@ def organize_file(
     shutil.move(str(src), str(dest))
     result["status"] = "moved"
     return result
+
+
+def unique_path(dest: Path) -> Path:
+    """目标路径已存在时加 (1)/(2)… 后缀，返回可用路径。"""
+    dest = Path(dest)
+    if not dest.exists():
+        return dest
+    stem, suffix = dest.stem, dest.suffix
+    i = 1
+    while dest.with_name(f"{stem} ({i}){suffix}").exists():
+        i += 1
+    return dest.with_name(f"{stem} ({i}){suffix}")
+
+
+def _is_duplicate(src: Path, dest: Path) -> bool:
+    """启发式判重：文件大小相同且时长相差 2 秒以内 → 视为同一首歌。
+
+    不同来源的同一首歌编码可能不同，但大小+时长同时撞上的概率极低。
+    """
+    try:
+        if src.stat().st_size != dest.stat().st_size:
+            return False
+    except OSError:
+        return False
+    try:
+        from mutagen.mp3 import MP3
+        a, b = MP3(str(src)), MP3(str(dest))
+        return abs(a.info.length - b.info.length) <= 2
+    except Exception:  # noqa: BLE001 - 读不出时长时按大小判重
+        return True
+
+
+def merge_file(
+    src: str | Path,
+    library: str | Path,
+    info: dict,
+    *,
+    on_duplicate: str = "skip",
+    dry_run: bool = False,
+) -> dict:
+    """归类并合并到已有音乐库（去重）。
+
+    on_duplicate: "skip"（默认，判重后跳过；非重复则改名并入）、
+                  "rename"（直接改名并入）、"replace"（覆盖目标）。
+    返回 {"src", "dest", "status"}，
+    status: moved | skipped_duplicate | renamed | replaced | dry_run。
+    """
+    src = Path(src)
+    dest = target_path(library, info)
+    if dest.exists():
+        if on_duplicate == "skip" and _is_duplicate(src, dest):
+            action = "skipped_duplicate"
+        elif on_duplicate == "replace":
+            action = "replaced"
+        else:
+            dest = unique_path(dest)
+            action = "renamed"
+    else:
+        action = "moved"
+    result = {"src": str(src), "dest": str(dest),
+              "status": "dry_run" if dry_run else action,
+              "action": action}
+    if dry_run or action == "skipped_duplicate":
+        return result
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if action == "replaced" and dest.exists():
+        dest.unlink()
+    shutil.move(str(src), str(dest))
+    return result

@@ -87,6 +87,43 @@ python -m mp3organizer fix-tags D:\老音乐 --guess-from-filename --llm
 规则能猜出的文件名不会调大模型；调过的文件名会本地缓存，不重复花钱；
 大模型猜出的项在报告里标"大模型猜测·置信度"，失败会自动回退到正则。
 
+## 整理杂乱文件名（rename）
+
+有些文件名特别长、夹杂各种噪音（码率标记、网址、"免费下载"、括号备注等），
+用大模型找出真正的演唱者和曲名，改成标准文件名（默认"演唱者 - 标题.mp3"），
+并顺手把解析出的演唱者/标题填入空的标签字段：
+
+```bat
+set MP3ORGANIZER_LLM_API_KEY=你的key
+
+REM 先试运行看效果
+python -m mp3organizer rename D:\老音乐 --llm --dry-run --report 报告.html
+
+REM 确认无误后正式执行
+python -m mp3organizer rename D:\老音乐 --llm
+```
+
+- 不加 `--llm` 也能用：正则处理简单情况（如 `王菲-红豆.mp3` → `王菲 - 红豆.mp3`），免费
+- 已经是标准格式的文件自动跳过，不调大模型
+- 同名冲突自动加 `(1)` 后缀；`--format "{title} - {artist}"` 可自定义模板
+- `--no-tag-write` 只改文件名、不写标签
+
+## 合并到已有音乐库（merge）
+
+一个文件夹是已经整理好的音乐库，另一个文件夹是没整理的散文件：批量整理散文件
+（修标签→查完整性→归类→封面），去重合并进音乐库：
+
+```bat
+python -m mp3organizer merge D:\未整理 D:\音乐库 --dry-run
+python -m mp3organizer merge D:\未整理 D:\音乐库 --guess-from-filename --llm
+```
+
+- 判重规则：目标位置已存在**文件大小相同且时长相差 2 秒内**的文件 → 视为重复，跳过
+- `--on-duplicate`：`skip` 跳过重复（默认）；`rename` 改名并入；`replace` 覆盖
+- 图形界面里勾选"合并模式：音乐库已有同曲目时跳过（去重并入）"效果相同
+
+推荐流程：先 `rename` 把文件名理顺，再 `merge` 并入音乐库。
+
 打包成单文件 exe：`pip install pyinstaller` 后
 
 ```bat

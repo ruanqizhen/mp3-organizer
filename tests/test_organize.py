@@ -74,3 +74,88 @@ def test_organize_file_collision_never_overwrites(tmp_path):
     dests = sorted((lib / "Pop" / "周杰伦").glob("*.mp3"))
     # 注意：按 Unicode 码点排序，空格(U+0020) < 点号(U+002E)
     assert [d.name for d in dests] == ["夜曲 (1).mp3", "夜曲.mp3"]
+
+
+# ---- merge_file / _is_duplicate ----
+
+from mp3organizer.organize import merge_file, unique_path, _is_duplicate
+
+FRAME = b"\xff\xfb\x90\x00" + b"\x00" * 413  # 417 字节假 MPEG 帧
+
+
+def _stream(path: Path, n_frames: int):
+    path.write_bytes(FRAME * n_frames)
+
+
+def _info(title="夜曲", artist="周杰伦", genre="流行"):
+    return {"path": "/m/x.mp3", "title": title, "artist": artist,
+            "album": "", "genre": genre}
+
+
+def test_is_duplicate_same_content(tmp_path):
+    a, b = tmp_path / "a.mp3", tmp_path / "b.mp3"
+    _stream(a, 20)
+    _stream(b, 20)
+    assert _is_duplicate(a, b)
+
+
+def test_is_duplicate_different_size(tmp_path):
+    a, b = tmp_path / "a.mp3", tmp_path / "b.mp3"
+    _stream(a, 20)
+    _stream(b, 30)
+    assert not _is_duplicate(a, b)
+
+
+def test_merge_file_skips_duplicate(tmp_path):
+    lib = tmp_path / "lib"
+    dest = lib / "流行" / "周杰伦" / "夜曲.mp3"
+    dest.parent.mkdir(parents=True)
+    _stream(dest, 20)
+    src = tmp_path / "src" / "夜曲.mp3"
+    src.parent.mkdir(parents=True)
+    _stream(src, 20)  # 内容相同 → 重复
+    r = merge_file(src, lib, _info())
+    assert r["status"] == "skipped_duplicate"
+    assert src.exists()  # 没被移走
+
+
+def test_merge_file_renames_when_different(tmp_path):
+    lib = tmp_path / "lib"
+    dest = lib / "流行" / "周杰伦" / "夜曲.mp3"
+    dest.parent.mkdir(parents=True)
+    _stream(dest, 20)
+    src = tmp_path / "src" / "夜曲.mp3"
+    src.parent.mkdir(parents=True)
+    _stream(src, 30)  # 内容不同 → 改名并入
+    r = merge_file(src, lib, _info())
+    assert r["status"] == "renamed"
+    assert r["dest"].endswith("夜曲 (1).mp3")
+    assert Path(r["dest"]).exists()
+    assert not src.exists()
+
+
+def test_merge_file_replace(tmp_path):
+    lib = tmp_path / "lib"
+    dest = lib / "流行" / "周杰伦" / "夜曲.mp3"
+    dest.parent.mkdir(parents=True)
+    _stream(dest, 20)
+    src = tmp_path / "src" / "夜曲.mp3"
+    src.parent.mkdir(parents=True)
+    _stream(src, 30)
+    r = merge_file(src, lib, _info(), on_duplicate="replace")
+    assert r["status"] == "replaced"
+    assert Path(r["dest"]).stat().st_size == len(FRAME) * 30
+
+
+def test_merge_file_moves_new(tmp_path):
+    lib = tmp_path / "lib"
+    src = tmp_path / "src" / "红豆.mp3"
+    src.parent.mkdir(parents=True)
+    _stream(src, 20)
+    r = merge_file(src, lib, _info(title="红豆", artist="王菲"))
+    assert r["status"] == "moved"
+    assert Path(r["dest"]).exists()
+
+
+def test_unique_path():
+    assert unique_path(Path("/nonexistent/x.mp3")) == Path("/nonexistent/x.mp3")

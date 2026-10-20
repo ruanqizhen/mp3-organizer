@@ -54,6 +54,7 @@ class App(tk.Tk):
                 ("guess", "无标签时从文件名猜标签", False),
                 ("do_check", "完整性检查（需 mp3val/ffmpeg，无则跳过）", True),
                 ("do_organize", "按类型/演唱者归类整理", True),
+                ("merge_mode", "合并模式：音乐库已有同曲目时跳过（去重并入）", False),
                 ("do_cover", "自动下载专辑封面并嵌入", True),
                 ("dry_run", "试运行（只生成报告，不修改任何文件）", True)):
             var = tk.BooleanVar(value=default)
@@ -212,6 +213,7 @@ class App(tk.Tk):
             encodings=encodings,
             guess_from_filename=self._vars["guess"].get(),
             llm_config=llm_config,
+            merge_mode=self._vars["merge_mode"].get(),
             min_score=min_score,
             report_html=self._report_path,
         )
@@ -270,6 +272,8 @@ class App(tk.Tk):
                 r.get("tag_status") in ("fixed", "guessed")
                 or r.get("integrity_status") in ("fixed", "broken", "unreadable")
                 or str(r.get("cover_status", "")).startswith("needs_review")
+                or r.get("organize_action") in (
+                    "skipped_duplicate", "renamed", "replaced")
                 or r.get("llm_error")
             )
             if interesting and shown < 100:

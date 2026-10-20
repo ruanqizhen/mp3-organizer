@@ -262,3 +262,41 @@ def fix_file(
         result["backup"] = str(_backup_copy(path, Path(backup_dir), backup_root))
     audio.save(v2_version=4)  # 统一写回 ID3v2.4 + UTF-8
     return result
+
+
+def fill_tags(
+    path: str | Path,
+    fields: dict,
+    *,
+    source: str = "filename",
+    dry_run: bool = False,
+    backup_dir: str | Path | None = None,
+) -> dict:
+    """把 fields 中的标签值填入空字段（不覆盖已有值）。
+
+    fields 可含 title/artist/album/genre/year/track 子集。
+    返回 {"status": "filled"|"unchanged"|"error", "changes": [...],
+          "backup": ..., "error": ...}。
+    """
+    path = Path(path)
+    try:
+        try:
+            audio = ID3(str(path))
+        except ID3NoHeaderError:
+            audio = ID3()
+        changes = _apply_guess(audio, fields, source)
+        if not changes:
+            return {"status": "unchanged", "changes": [], "backup": None,
+                    "error": None}
+        if dry_run:
+            return {"status": "filled", "changes": changes, "backup": None,
+                    "error": None}
+        backup = None
+        if backup_dir is not None:
+            backup = str(_backup_copy(path, Path(backup_dir)))
+        audio.save(str(path), v2_version=4)
+        return {"status": "filled", "changes": changes, "backup": backup,
+                "error": None}
+    except Exception as exc:  # noqa: BLE001 - 标签损坏形态各异，统一记录
+        return {"status": "error", "changes": [], "backup": None,
+                "error": "%s: %s" % (type(exc).__name__, exc)}

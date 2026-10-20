@@ -107,3 +107,37 @@ def test_pipeline_steps_can_be_disabled(tmp_path):
     assert rec["integrity_status"] == "skipped"
     assert rec["cover_status"] == "skipped"
     assert rec["new_path"] == ""
+
+
+def _make_clean_mp3(path: Path, title: str, artist: str) -> None:
+    """标签已是正确 Unicode 的 MP3（fix-tags 不会改动它）。"""
+    tag = ID3()
+    tag.add(TIT2(encoding=Encoding.UTF8, text=[title]))
+    tag.add(TPE1(encoding=Encoding.UTF8, text=[artist]))
+    tag.save(str(path))
+    with open(path, "ab") as f:
+        f.write(FRAME * 20)
+
+
+def test_pipeline_merge_mode_skips_duplicate(tmp_path):
+    import shutil
+    src = tmp_path / "src"
+    src.mkdir()
+    _make_clean_mp3(src / "夜曲.mp3", "夜曲", "周杰伦")
+    _make_clean_mp3(src / "红豆.mp3", "红豆", "王菲")
+    lib = tmp_path / "lib"
+    # 音乐库里已经有一份一模一样的夜曲
+    dup = lib / "未知类型" / "周杰伦" / "夜曲.mp3"
+    dup.parent.mkdir(parents=True)
+    shutil.copy2(src / "夜曲.mp3", dup)
+
+    result = run_pipeline(
+        src, lib, merge_mode=True, do_cover=False,
+        mp3val_exe=None, ffmpeg_exe=None,
+    )
+    by_name = {Path(r["path"]).name: r for r in result["records"]}
+    assert by_name["夜曲.mp3"]["organize_status"] == "skipped_duplicate"
+    assert (src / "夜曲.mp3").exists()  # 重复的没被移走
+    assert by_name["红豆.mp3"]["organize_status"] == "moved"
+    assert (lib / "未知类型" / "王菲" / "红豆.mp3").exists()
+    assert not (src / "红豆.mp3").exists()

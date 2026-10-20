@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .scanner import find_mp3_files, read_info
 from .encoding import fix_file, CANDIDATE_ENCODINGS
-from .organize import organize_file
+from .organize import organize_file, merge_file
 from .integrity import check_file, quarantine
 from .cover import process_file
 from .report import build_html, build_csv
@@ -48,6 +48,8 @@ def run_pipeline(
     report_csv: str | Path | None = None,
     llm_config=None,
     llm_cache_dir: str | Path | None = None,
+    merge_mode: bool = False,
+    on_duplicate: str = "skip",
     progress=None,
 ) -> dict:
     """执行完整流水线，返回 {"records", "total", "counts"}。
@@ -111,8 +113,15 @@ def run_pipeline(
         target = p
         if do_organize:
             _p(i, total, "organize", str(p))
-            org = organize_file(p, library, info, dry_run=dry_run)
+            if merge_mode:
+                # 合并到已有音乐库：目标已存在时按 on_duplicate 去重处理
+                org = merge_file(p, library, info, on_duplicate=on_duplicate,
+                                 dry_run=dry_run)
+            else:
+                org = organize_file(p, library, info, dry_run=dry_run)
             rec["new_path"] = org["dest"]
+            rec["organize_status"] = org["status"]
+            rec["organize_action"] = org.get("action", org["status"])
             if not dry_run:
                 target = Path(org["dest"])
 

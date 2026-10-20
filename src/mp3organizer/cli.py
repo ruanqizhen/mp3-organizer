@@ -198,6 +198,108 @@ def cmd_gui(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_rename(args: argparse.Namespace) -> int:
+    """把杂乱文件名整理成标准格式；解析出的演唱者/标题顺手填入空标签。"""
+    import os
+    from .rename import plan_rename
+    from .encoding import fill_tags
+
+    llm_config = _llm_config_from_args(args) if args.llm else None
+    records, n_renamed = [], 0
+    for p in find_mp3_files(args.root):
+        plan = plan_rename(p, fmt=args.format, llm_config=llm_config)
+        rec = {"path": plan["path"], "tag_status": "", "tag_changes": [],
+               "integrity_status": "", "cover_status": "",
+               "new_path": plan["new_path"] or plan["reason"]}
+        if plan["status"] == "planned":
+            if args.dry_run:
+                print(f"[试运行改名] {p.name} → {plan['new_name']}（{plan['source']}）")
+            else:
+                if not args.no_tag_write:
+                    fr = fill_tags(
+                        p, {"artist": plan["artist"], "title": plan["title"]},
+                        source="llm" if plan["source"] == "llm" else "filename",
+                        backup_dir=args.backup_dir)
+                    rec["tag_status"] = fr["status"]
+                    rec["tag_changes"] = fr["changes"]
+                os.rename(plan["path"], plan["new_path"])
+                n_renamed += 1
+                tag_note = f"，标签{rec['tag_status']}" if rec["tag_status"] == "filled" else ""
+                print(f"[改名] {p.name} → {plan['new_name']}"
+                      f"（{plan['source']}，置信度{plan['confidence']}）{tag_note}")
+            if plan.get("llm_error"):
+                print(f"  大模型调用失败（已回退正则）：{plan['llm_error']}")
+        records.append(rec)
+    print(f"共 {len(records)} 个文件，改名 {n_renamed} 个"
+          + ("（试运行）" if args.dry_run else ""))
+    _emit_reports(records, args)
+    return 0
+
+
+def cmd_merge(args: argparse.Namespace) -> int:
+    """批量整理未整理文件夹，去重合并到已有音乐库（= all + 去重归类）。"""
+    from .pipeline import run_pipeline, PHASE_NAMES
+
+    encodings = tuple(args.encodings.split(",")) if args.encodings else CANDIDATE_ENCODINGS
+
+    def _progress(i: int, total: int, phase: str, message: str) -> None:
+        if phase in ("tags", "integrity", "organize", "cover"):
+            return
+        if phase == "done":
+            print(message)
+
+    result = run_pipeline(
+        args.root, args.library,
+        dry_run=args.dry_run, backup_dir=args.backup_dir,
+        quarantine_dir=args.quarantine_dir, cache_dir=args.cache_dir,
+        encodings=encodings, force_encoding=args.force_encoding,
+        guess_from_filename=args.guess_from_filename,
+        llm_config=_llm_config_from_args(args),
+        merge_mode=True, on_duplicate=args.on_duplicate,
+        fix_streams=not args.no_fix, mp3val_exe=args.mp3val, ffmpeg_exe=args.ffmpeg,
+        min_score=args.min_score, report_html=args.report, report_csv=args.report_csv,
+        progress=_progress,
+    )
+    for r in result["records"]:
+        action = r.get("organize_action", r.get("organize_status", ""))
+        prefix = "试运行：" if args.dry_run else ""
+        if action == "skipped_duplicate":
+            print(f"[{prefix}跳过重复] {r['path']}")
+        elif action == "renamed":
+            print(f"[{prefix}改名并入] {r['path']} → {r['new_path']}")
+        elif action == "replaced":
+            print(f"[{prefix}覆盖] {r['path']} → {r['new_path']}")
+        elif action == "moved":
+            print(f"[{prefix}并入] {r['path']} → {r['new_path']}")
+        else:
+            print(f"[{r.get('tag_status')}/{r.get('integrity_status')}/{r.get('cover_status')}]"
+                  f" {r['path']}")
+        if r.get("llm_error"):
+            print(f"  大模型调用失败（已回退）：{r['llm_error']}")
+    if args.report:
+        print(f"HTML 报告: {args.report}")
+    if args.report_csv:
+        print(f"CSV 报告: {args.report_csv}")
+    return 0
+
+
+def _add_pipeline_args(s: argparse.ArgumentParser) -> None:
+    """all/merge 共用的流水线参数。"""
+    _add_common(s)
+    s.add_argument("library", help="目标音乐库根目录")
+    s.add_argument("--quarantine-dir", default=None, help="损坏文件隔离目录")
+    s.add_argument("--no-fix", action="store_true", help="只检查不修复")
+    s.add_argument("--mp3val", default="auto")
+    s.add_argument("--ffmpeg", default="auto")
+    s.add_argument("--encodings", default=None)
+    s.add_argument("--force-encoding", default=None)
+    s.add_argument("--guess-from-filename", action="store_true",
+                   help="无标签时从文件名构建标签；有标签但标题/演唱者为空时补齐")
+    _add_llm_args(s)
+    s.add_argument("--min-score", type=float, default=0.75)
+    s.add_argument("--cache-dir", default=None)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mp3tool", description="Windows 老 MP3 批量整理工具")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -231,19 +333,22 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--cache-dir", default=None, help="封面下载缓存目录")
 
     s = sub.add_parser("all", help="完整流水线")
+    _add_pipeline_args(s)
+
+    s = sub.add_parser("merge", help="批量整理未整理文件夹并去重合并到已有音乐库")
+    _add_pipeline_args(s)
+    s.add_argument("--on-duplicate", default="skip",
+                   choices=("skip", "rename", "replace"),
+                   help="目标已存在同曲目时的处理：skip 跳过重复（默认），"
+                        "rename 改名并入，replace 覆盖")
+
+    s = sub.add_parser("rename", help="把杂乱文件名整理成标准格式（默认“演唱者 - 标题”）")
     _add_common(s)
-    s.add_argument("library", help="目标音乐库根目录")
-    s.add_argument("--quarantine-dir", default=None, help="损坏文件隔离目录")
-    s.add_argument("--no-fix", action="store_true", help="只检查不修复")
-    s.add_argument("--mp3val", default="auto")
-    s.add_argument("--ffmpeg", default="auto")
-    s.add_argument("--encodings", default=None)
-    s.add_argument("--force-encoding", default=None)
-    s.add_argument("--guess-from-filename", action="store_true",
-                   help="无标签时从文件名构建标签；有标签但标题/演唱者为空时补齐")
+    s.add_argument("--format", default="{artist} - {title}",
+                   help="标准文件名模板，可用 {artist}/{title}/{album}，默认“{artist} - {title}”")
     _add_llm_args(s)
-    s.add_argument("--min-score", type=float, default=0.75)
-    s.add_argument("--cache-dir", default=None)
+    s.add_argument("--no-tag-write", action="store_true",
+                   help="只改文件名，不写标签")
 
     s = sub.add_parser("gui", help="启动图形界面")
     return p
@@ -258,6 +363,7 @@ def main(argv: list[str] | None = None) -> int:
     return {
         "scan": cmd_scan, "fix-tags": cmd_fix_tags, "organize": cmd_organize,
         "check": cmd_check, "cover": cmd_cover, "all": cmd_all, "gui": cmd_gui,
+        "rename": cmd_rename, "merge": cmd_merge,
     }[args.cmd](args)
 
 

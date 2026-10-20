@@ -62,21 +62,21 @@ SYSTEM_PROMPT = """你是中文老歌收藏整理助手。用户会给你一批 
 """
 
 
-def _cache_path(cache_dir: str | Path | None) -> Path:
+def _cache_path(cache_dir: str | Path | None, cache_name: str) -> Path:
     if cache_dir is None:
         cache_dir = Path.home() / ".cache" / "mp3-organizer"
-    return Path(cache_dir) / "llm_tags.json"
+    return Path(cache_dir) / cache_name
 
 
-def _load_cache(cache_dir: str | Path | None) -> dict:
+def _load_cache(cache_dir: str | Path | None, cache_name: str) -> dict:
     try:
-        return json.loads(_cache_path(cache_dir).read_text(encoding="utf-8"))
+        return json.loads(_cache_path(cache_dir, cache_name).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 
 
-def _save_cache(cache_dir: str | Path | None, cache: dict) -> None:
-    p = _cache_path(cache_dir)
+def _save_cache(cache_dir: str | Path | None, cache_name: str, cache: dict) -> None:
+    p = _cache_path(cache_dir, cache_name)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(cache, ensure_ascii=False, indent=1), encoding="utf-8")
 
@@ -106,7 +106,7 @@ def _extract_json_array(text: str) -> list:
 
 
 def _query_batch(
-    filenames: list[str], config: LLMConfig, request_fn=None
+    filenames: list[str], config: LLMConfig, system_prompt: str, request_fn=None
 ) -> list[dict]:
     url = config.base_url.rstrip("/") + "/chat/completions"
     headers = {"Content-Type": "application/json"}
@@ -115,7 +115,7 @@ def _query_batch(
     payload = {
         "model": config.model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(filenames, ensure_ascii=False)},
         ],
         "temperature": 0,
@@ -143,9 +143,11 @@ def _query_batch(
     return items
 
 
-def query_llm(
+def _query_cached(
     filenames: list[str],
     config: LLMConfig,
+    system_prompt: str,
+    cache_name: str,
     *,
     cache_dir: str | Path | None = None,
     request_fn=None,
@@ -157,13 +159,52 @@ def query_llm(
     """
     if not config.is_configured():
         raise LLMError("大模型未配置：需要 API 地址和模型名")
-    cache = _load_cache(cache_dir)
+    cache = _load_cache(cache_dir, cache_name)
     todo = [f for f in filenames if f not in cache]
     bs = max(1, config.batch_size)
     for i in range(0, len(todo), bs):
         batch = todo[i:i + bs]
-        results = _query_batch(batch, config, request_fn)
+        results = _query_batch(batch, config, system_prompt, request_fn)
         for name, item in zip(batch, results):
             cache[name] = item
-        _save_cache(cache_dir, cache)
+        _save_cache(cache_dir, cache_name, cache)
     return [cache.get(f, {}) for f in filenames]
+
+
+def query_llm(
+    filenames: list[str],
+    config: LLMConfig,
+    *,
+    cache_dir: str | Path | None = None,
+    request_fn=None,
+) -> list[dict]:
+    """猜标签：文件名 → 标题/演唱者/专辑/类型/年份/置信度。"""
+    return _query_cached(filenames, config, SYSTEM_PROMPT, "llm_tags.json",
+                         cache_dir=cache_dir, request_fn=request_fn)
+
+
+RENAME_SYSTEM_PROMPT = """你是文件名整理助手。用户会给你一批 MP3 文件名（JSON 数组），每个都很长很乱，夹杂着各种无关信息。
+请找出每首歌真正的"演唱者"和"曲名"，忽略码率标记（如 320K/FLAC）、网址、"免费下载"、括号里的备注、开头序号等噪音。
+
+要求：
+1. 只返回 JSON 数组，与输入顺序一一对应，不要输出其他任何内容。
+2. 每项包含字段：artist（演唱者/演奏者，未知填空字符串）、title（曲名）、confidence（0~1，你对这次解析的把握）。
+3. 发挥你的中文流行音乐知识：拼音缩写、错别字、顺序颠倒都要尽力还原。
+4. 实在看不出的文件名：title 填去掉噪音后最像曲名的部分，artist 填空字符串，confidence 填 0.1，不要编造演唱者。
+
+示例：
+输入：["[320K]周杰伦-夜曲(官方正式版)_www.xiami.com免费下载.mp3", "03. 王菲 - 红豆 (Live现场版).mp3"]
+输出：[{"artist": "周杰伦", "title": "夜曲", "confidence": 0.95}, {"artist": "王菲", "title": "红豆", "confidence": 0.9}]
+"""
+
+
+def parse_filenames(
+    filenames: list[str],
+    config: LLMConfig,
+    *,
+    cache_dir: str | Path | None = None,
+    request_fn=None,
+) -> list[dict]:
+    """解析杂乱文件名 → [{artist, title, confidence}]，用于整理标准文件名。"""
+    return _query_cached(filenames, config, RENAME_SYSTEM_PROMPT, "llm_rename.json",
+                         cache_dir=cache_dir, request_fn=request_fn)

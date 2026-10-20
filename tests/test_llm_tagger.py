@@ -126,3 +126,20 @@ def test_auth_header_omitted_without_key(tmp_path):
         response_obj={"choices": [{"message": {"content": json.dumps(body)}}]})
     query_llm(["a.mp3"], cfg, cache_dir=tmp_path, request_fn=fake_post)
     assert "Authorization" not in calls[0]["headers"]
+
+
+def test_parse_filenames(tmp_path):
+    import json
+    from mp3organizer.llm_tagger import parse_filenames
+    body = [{"artist": "周杰伦", "title": "夜曲", "confidence": 0.95}]
+    fake_post, calls = _fake_post(
+        response_obj={"choices": [{"message": {"content": json.dumps(body)}}]})
+    res = parse_filenames(["[320K]xxx.mp3"], CFG, cache_dir=tmp_path,
+                          request_fn=fake_post)
+    assert res[0]["artist"] == "周杰伦"
+    assert res[0]["title"] == "夜曲"
+    # 与标签猜测用不同的缓存文件
+    assert (tmp_path / "llm_rename.json").exists()
+    assert not (tmp_path / "llm_tags.json").exists()
+    # prompt 里要求忽略噪音
+    assert "噪音" in calls[0]["payload"]["messages"][0]["content"]
