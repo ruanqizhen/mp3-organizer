@@ -46,6 +46,8 @@ def run_pipeline(
     min_score: float = 0.75,
     report_html: str | Path | None = None,
     report_csv: str | Path | None = None,
+    llm_config=None,
+    llm_cache_dir: str | Path | None = None,
     progress=None,
 ) -> dict:
     """执行完整流水线，返回 {"records", "total", "counts"}。
@@ -77,9 +79,13 @@ def run_pipeline(
                 p, dry_run=dry_run, backup_dir=backup_dir, backup_root=root,
                 encodings=encodings, force_encoding=force_encoding,
                 guess_from_filename=guess_from_filename,
+                llm_config=llm_config,
+                llm_cache_dir=llm_cache_dir or cache_dir,
             )
             rec["tag_status"] = tag["status"]
             rec["tag_changes"] = tag["changes"]
+            if tag.get("llm_error"):
+                rec["llm_error"] = tag["llm_error"]
             info = read_info(p)  # 用修复后的标签继续
         else:
             rec["tag_status"] = "skipped"

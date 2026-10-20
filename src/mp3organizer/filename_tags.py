@@ -85,3 +85,61 @@ def guess_from_filename(path: str | Path) -> dict:
             fixed, _ = fix_text(result[key])
             result[key] = fixed
     return result
+
+
+def _empty_guess() -> dict:
+    return {"title": "", "artist": "", "album": "", "track": ""}
+
+
+def guess_tags(
+    path: str | Path,
+    *,
+    llm_config=None,
+    llm_cache_dir: str | Path | None = None,
+    _llm_fn=None,
+) -> tuple[dict, str, str]:
+    """两档猜测：先正则，大模型做回退。
+
+    - 未启用大模型（llm_config 和 _llm_fn 都没给）：沿用旧规则，正则猜出
+      标题或演唱者之一即算成功。
+    - 启用大模型：正则必须同时猜出演唱者+标题才算成功；否则问大模型。
+      大模型失败或也猜不出时，退回正则的部分结果（若有）。
+    返回 (guess_dict, source, error)；source 为 "regex" / "llm" / "none"，
+    error 非空表示大模型调用失败（已回退，不抛异常）。
+    _llm_fn(names) -> list[dict] 供测试注入。
+    """
+    regex_guess = guess_from_filename(path)
+    regex_full = bool(regex_guess["title"] and regex_guess["artist"])
+    regex_partial = bool(regex_guess["title"] or regex_guess["artist"])
+    llm_wanted = llm_config is not None or _llm_fn is not None
+
+    if regex_full or not llm_wanted:
+        if regex_partial:
+            return regex_guess, "regex", ""
+        return _empty_guess(), "none", ""
+
+    try:
+        if _llm_fn is not None:
+            items = _llm_fn([Path(path).name])
+        else:
+            from .llm_tagger import query_llm
+            items = query_llm([Path(path).name], llm_config, cache_dir=llm_cache_dir)
+        llm_error = ""
+    except Exception as exc:  # noqa: BLE001 - 网络/解析失败都回退，不中断流程
+        items, llm_error = [], "%s: %s" % (type(exc).__name__, exc)
+
+    item = items[0] if items else {}
+    guess = {
+        "title": str(item.get("title", "") or "").strip(),
+        "artist": str(item.get("artist", "") or "").strip(),
+        "album": str(item.get("album", "") or "").strip(),
+        "track": str(item.get("track", "") or "").strip(),
+        "genre": str(item.get("genre", "") or "").strip(),
+        "year": str(item.get("year", "") or "").strip(),
+        "confidence": item.get("confidence", 0),
+    }
+    if guess["title"] or guess["artist"]:
+        return guess, "llm", llm_error
+    if regex_partial:
+        return regex_guess, "regex", llm_error
+    return _empty_guess(), "none", llm_error

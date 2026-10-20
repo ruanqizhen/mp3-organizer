@@ -1,8 +1,8 @@
-"""命令行入口：mp3tool scan|fix-tags|organize|check|cover|all"""
+"""命令行入口：mp3tool scan|fix-tags|organize|check|cover|all|gui"""
 from __future__ import annotations
 
 import argparse
-import json
+import os
 from pathlib import Path
 
 from . import __version__
@@ -12,6 +12,39 @@ from .organize import organize_file
 from .integrity import check_file, quarantine
 from .cover import process_file
 from .report import build_html, build_csv
+
+
+def _add_llm_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--llm", action="store_true",
+                   help="启用大模型猜标签（文件名用规则猜不出时回退到大模型）")
+    p.add_argument("--llm-base-url", default=None,
+                   help="大模型 API 地址（OpenAI 兼容），默认取环境变量 MP3ORGANIZER_LLM_BASE_URL，否则为 DeepSeek")
+    p.add_argument("--llm-api-key", default=None,
+                   help="API Key（建议用环境变量 MP3ORGANIZER_LLM_API_KEY，避免留在命令行历史里；本地模型可不填）")
+    p.add_argument("--llm-model", default=None,
+                   help="模型名，默认取环境变量 MP3ORGANIZER_LLM_MODEL，否则为 deepseek-chat")
+
+
+def _llm_config_from_args(args: argparse.Namespace):
+    """根据命令行参数构建 LLMConfig；未启用 --llm 时返回 None。"""
+    if not getattr(args, "llm", False):
+        return None
+    from .llm_tagger import LLMConfig
+    cfg = LLMConfig(
+        base_url=args.llm_base_url
+        or os.environ.get("MP3ORGANIZER_LLM_BASE_URL", "https://api.deepseek.com"),
+        api_key=args.llm_api_key
+        or os.environ.get("MP3ORGANIZER_LLM_API_KEY", "")
+        or os.environ.get("DEEPSEEK_API_KEY", ""),
+        model=args.llm_model
+        or os.environ.get("MP3ORGANIZER_LLM_MODEL", "deepseek-chat"),
+    )
+    if not cfg.is_configured():
+        raise SystemExit("启用 --llm 需要提供 API 地址和模型名（--llm-base-url / --llm-model）")
+    if cfg.needs_key():
+        raise SystemExit("请提供 API Key：--llm-api-key，或环境变量 MP3ORGANIZER_LLM_API_KEY"
+                         "（本地 Ollama 等本机模型可不填）")
+    return cfg
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:
@@ -47,12 +80,14 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
 def cmd_fix_tags(args: argparse.Namespace) -> int:
     encodings = tuple(args.encodings.split(",")) if args.encodings else CANDIDATE_ENCODINGS
+    llm_config = _llm_config_from_args(args)
     records, n_fixed = [], 0
     for p in find_mp3_files(args.root):
         r = fix_file(p, dry_run=args.dry_run, backup_dir=args.backup_dir,
                      backup_root=args.root, encodings=encodings,
                      force_encoding=args.force_encoding,
-                     guess_from_filename=args.guess_from_filename)
+                     guess_from_filename=args.guess_from_filename,
+                     llm_config=llm_config)
         n_fixed += r["status"] in ("fixed", "guessed")
         records.append({"path": r["path"], "tag_status": r["status"],
                         "tag_changes": r["changes"], "integrity_status": "",
@@ -61,6 +96,12 @@ def cmd_fix_tags(args: argparse.Namespace) -> int:
             print(f"[修复] {p}")
             for c in r["changes"]:
                 print(f"    {c['frame']}: {c['old']} → {c['new']} ({c['encoding']})")
+        elif r["status"] == "guessed":
+            print(f"[猜测] {p}")
+            for c in r["changes"]:
+                print(f"    {c['frame']}: → {c['new']} ({c['encoding']})")
+        if r.get("llm_error"):
+            print(f"  大模型调用失败（已回退）：{r['llm_error']}")
     print(f"共 {len(records)} 个文件，修复 {n_fixed} 个" + ("（试运行）" if args.dry_run else ""))
     _emit_reports(records, args)
     return 0
@@ -134,6 +175,7 @@ def cmd_all(args: argparse.Namespace) -> int:
         quarantine_dir=args.quarantine_dir, cache_dir=args.cache_dir,
         encodings=encodings, force_encoding=args.force_encoding,
         guess_from_filename=args.guess_from_filename,
+        llm_config=_llm_config_from_args(args),
         fix_streams=not args.no_fix, mp3val_exe=args.mp3val, ffmpeg_exe=args.ffmpeg,
         min_score=args.min_score, report_html=args.report, report_csv=args.report_csv,
         progress=_progress,
@@ -141,6 +183,8 @@ def cmd_all(args: argparse.Namespace) -> int:
     for r in result["records"]:
         print(f"[{r.get('tag_status')}/{r.get('integrity_status')}/{r.get('cover_status')}]"
               f" {r['path']}")
+        if r.get("llm_error"):
+            print(f"  大模型调用失败（已回退）：{r['llm_error']}")
     if args.report:
         print(f"HTML 报告: {args.report}")
     if args.report_csv:
@@ -168,6 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--force-encoding", default=None, help="强制指定编码，如 gbk")
     s.add_argument("--guess-from-filename", action="store_true",
                    help="无标签时从文件名构建标签；有标签但标题/演唱者为空时补齐")
+    _add_llm_args(s)
 
     s = sub.add_parser("organize", help="按类型/演唱者归类到音乐库")
     _add_common(s)
@@ -196,6 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--force-encoding", default=None)
     s.add_argument("--guess-from-filename", action="store_true",
                    help="无标签时从文件名构建标签；有标签但标题/演唱者为空时补齐")
+    _add_llm_args(s)
     s.add_argument("--min-score", type=float, default=0.75)
     s.add_argument("--cache-dir", default=None)
 

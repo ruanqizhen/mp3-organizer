@@ -15,10 +15,19 @@ def _fmt_changes(changes: list[dict]) -> str:
         return "—"
     parts = []
     for c in changes:
-        mark = "（文件名猜测）" if c.get("guessed") else ""
+        enc = c.get("encoding", "")
+        if enc == "llm" and c.get("confidence"):
+            mark = "（大模型猜测·置信度%s）" % c["confidence"]
+        elif enc == "llm":
+            mark = "（大模型猜测）"
+        elif enc == "filename":
+            mark = "（文件名猜测）"
+        else:
+            mark = ""
         parts.append(
-            f"{html.escape(c['frame'])}: {html.escape(c['old'])} → "
-            f"{html.escape(c['new'])}{mark}"
+            "%s: %s → %s%s" % (
+                html.escape(c["frame"]), html.escape(c["old"]),
+                html.escape(c["new"]), mark)
         )
     return "<br>".join(parts)
 

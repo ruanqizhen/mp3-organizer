@@ -57,6 +57,36 @@ python -m mp3organizer cover D:\音乐库 --min-score 0.75
 `--force-encoding gbk` 可强制指定标签编码（跳过自动检测）；
 `--encodings gbk,big5` 可调整自动尝试顺序（日韩收藏建议改顺序）。
 
+## 大模型猜标签（可选）
+
+文件名太乱、正则猜不出时（拼音缩写、错别字、无分隔符等），可以回退到大模型。
+大模型凭中文流行音乐知识推断，还能顺带补全专辑、年份、类型：
+
+```bat
+REM 先配好 Key（建议用环境变量，避免留在命令行历史里）
+set MP3ORGANIZER_LLM_API_KEY=你的key
+
+python -m mp3organizer fix-tags D:\老音乐 --guess-from-filename --llm
+```
+
+模型完全由你自己设置（OpenAI 兼容接口）：
+
+| 参数 | 说明 | 默认值 |
+|---|---|---|
+| `--llm-base-url` | API 地址 | `https://api.deepseek.com`（环境变量 `MP3ORGANIZER_LLM_BASE_URL`） |
+| `--llm-api-key` | API Key | 环境变量 `MP3ORGANIZER_LLM_API_KEY` / `DEEPSEEK_API_KEY` |
+| `--llm-model` | 模型名 | `deepseek-chat`（环境变量 `MP3ORGANIZER_LLM_MODEL`） |
+
+常见配置：
+
+- **DeepSeek**：地址默认就是，填 Key 和 `deepseek-chat` 即可（便宜，中文好）
+- **Gemini**：地址 `https://generativelanguage.googleapis.com/v1beta/openai/`，模型 `gemini-2.0-flash`
+- **本地 Ollama**：地址 `http://localhost:11434/v1`，模型如 `qwen2.5:7b`，Key 可空（离线可用）
+
+图形界面里也有对应的设置区，填一次会自动记住（`~/.config/mp3-organizer/llm.json`）。
+规则能猜出的文件名不会调大模型；调过的文件名会本地缓存，不重复花钱；
+大模型猜出的项在报告里标"大模型猜测·置信度"，失败会自动回退到正则。
+
 打包成单文件 exe：`pip install pyinstaller` 后
 
 ```bat

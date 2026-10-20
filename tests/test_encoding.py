@@ -129,3 +129,39 @@ def test_fix_file_guess_dry_run(tmp_path):
     res = fix_file(p, guess_from_filename=True, dry_run=True)
     assert res["status"] == "guessed"
     assert p.read_bytes() == before
+
+
+def test_fix_file_llm_fallback_marked(tmp_path):
+    from mp3organizer.encoding import fix_file
+    from mp3organizer.llm_tagger import LLMConfig
+    p = tmp_path / "yq_zjl.mp3"
+    p.write_bytes(b"\x00" * 64)  # 无标签，正则也猜不出
+
+    def fake_llm(names):
+        return [{"title": "夜曲", "artist": "周杰伦", "album": "十一月的萧邦",
+                 "genre": "流行", "year": "2005", "confidence": 0.8}]
+
+    cfg = LLMConfig(base_url="https://fake.local", api_key="k", model="m")
+    res = fix_file(p, guess_from_filename=True, llm_config=cfg, _llm_fn=fake_llm)
+    assert res["status"] == "guessed"
+    assert all(c["encoding"] == "llm" for c in res["changes"])
+    reread = ID3(str(p))
+    assert reread["TIT2"].text == ["夜曲"]
+    assert reread["TCON"].text == ["流行"]  # 大模型连类型一起补
+    assert not res.get("llm_error")
+
+
+def test_fix_file_llm_error_recorded(tmp_path):
+    from mp3organizer.encoding import fix_file
+    from mp3organizer.llm_tagger import LLMConfig
+    p = tmp_path / "yq_zjl.mp3"
+    p.write_bytes(b"\x00" * 64)
+
+    def bad_llm(names):
+        raise RuntimeError("boom")
+
+    cfg = LLMConfig(base_url="https://fake.local", api_key="k", model="m")
+    res = fix_file(p, guess_from_filename=True, llm_config=cfg, _llm_fn=bad_llm)
+    assert res["status"] == "guessed"  # 大模型失败，退回正则部分结果
+    assert "boom" in res["llm_error"]
+    assert all(c["encoding"] == "filename" for c in res["changes"])

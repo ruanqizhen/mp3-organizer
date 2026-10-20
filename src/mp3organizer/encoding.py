@@ -19,7 +19,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from mutagen.id3 import ID3, ID3NoHeaderError, Encoding, TIT2, TPE1, TALB, TRCK
+from mutagen.id3 import ID3, ID3NoHeaderError, Encoding, TIT2, TPE1, TALB, TRCK, TCON, TDRC
 
 CANDIDATE_ENCODINGS: tuple[str, ...] = ("gbk", "big5", "shift_jis", "euc-kr", "utf-8")
 
@@ -107,14 +107,16 @@ def _backup_copy(path: Path, backup_dir: Path, backup_root: Path | None = None) 
     return dest
 
 
-def _apply_guess(audio: ID3, guess: dict) -> list[dict]:
-    """把从文件名猜出的标签写入 audio（只填空字段，不覆盖已有值）。
+def _apply_guess(audio: ID3, guess: dict, source: str = "filename") -> list[dict]:
+    """把猜出的标签写入 audio（只填空字段，不覆盖已有值）。
 
+    source: "filename"（正则）或 "llm"（大模型），记入 changes 供报告标注。
     返回 changes 记录，每条带 guessed=True 标记。
     """
     changes = []
-    for frame_id, key in (("TIT2", "title"), ("TPE1", "artist"),
-                          ("TALB", "album"), ("TRCK", "track")):
+    mapping = (("TIT2", "title"), ("TPE1", "artist"), ("TALB", "album"),
+               ("TCON", "genre"), ("TDRC", "year"), ("TRCK", "track"))
+    for frame_id, key in mapping:
         value = (guess.get(key) or "").strip()
         if not value:
             continue
@@ -126,27 +128,34 @@ def _apply_guess(audio: ID3, guess: dict) -> list[dict]:
                 current = text[0].strip()
         if current:
             continue
-        cls = {"TIT2": TIT2, "TPE1": TPE1, "TALB": TALB, "TRCK": TRCK}[frame_id]
+        cls = {"TIT2": TIT2, "TPE1": TPE1, "TALB": TALB,
+               "TCON": TCON, "TDRC": TDRC, "TRCK": TRCK}[frame_id]
         audio.add(cls(encoding=Encoding.UTF8, text=[value]))
         changes.append({"frame": frame_id, "old": "", "new": value,
-                        "encoding": "filename", "guessed": True})
+                        "encoding": "llm" if source == "llm" else "filename",
+                        "guessed": True,
+                        "confidence": guess.get("confidence")})
     return changes
 
 
 def _build_tag_from_filename(
     path: Path, result: dict, *, dry_run: bool,
     backup_dir: str | Path | None, backup_root: str | Path | None,
+    llm_config=None, llm_cache_dir: str | Path | None = None, _llm_fn=None,
 ) -> dict:
-    """文件完全没有标签时，从文件名构建一个新标签。"""
-    from .filename_tags import guess_from_filename as _guess
+    """文件完全没有标签时，从文件名构建一个新标签（正则→大模型两档）。"""
+    from .filename_tags import guess_tags
 
-    guess = _guess(path)
+    guess, source, llm_error = guess_tags(
+        path, llm_config=llm_config, llm_cache_dir=llm_cache_dir, _llm_fn=_llm_fn)
+    if llm_error:
+        result["llm_error"] = llm_error
     if not guess["title"] and not guess["artist"]:
         result["status"] = "no_tag"
         result["error"] = "文件名无法解析出标题/演唱者"
         return result
     audio = ID3()
-    result["changes"] = _apply_guess(audio, guess)
+    result["changes"] = _apply_guess(audio, guess, source)
     result["status"] = "guessed"
     if dry_run:
         return result
@@ -165,14 +174,19 @@ def fix_file(
     encodings: tuple[str, ...] = CANDIDATE_ENCODINGS,
     force_encoding: str | None = None,
     guess_from_filename: bool = False,
+    llm_config=None,
+    llm_cache_dir: str | Path | None = None,
+    _llm_fn=None,
 ) -> dict:
     """修复单个 MP3 的标签编码。
 
     返回 dict：path / status（fixed|guessed|unchanged|no_tag|unreadable）/
-    changes（[{frame, old, new, encoding[, guessed]}]）/ backup / error。
+    changes（[{frame, old, new, encoding[, guessed[, confidence]]}]）/
+    backup / error / llm_error（大模型调用失败时）。
     dry_run=True 时只报告不写文件；backup_dir 指定时改写前先备份。
     guess_from_filename=True 时：无标签则从文件名构建；有标签但标题/
     演唱者为空时，从文件名补齐空字段（不覆盖已有值）。
+    llm_config 传入后，正则猜不出时回退到大模型（_llm_fn 供测试注入）。
     """
     path = Path(path)
     result: dict = {
@@ -189,6 +203,8 @@ def fix_file(
             return _build_tag_from_filename(
                 path, result, dry_run=dry_run,
                 backup_dir=backup_dir, backup_root=backup_root,
+                llm_config=llm_config, llm_cache_dir=llm_cache_dir,
+                _llm_fn=_llm_fn,
             )
         result["status"] = "no_tag"
         return result
@@ -226,9 +242,14 @@ def fix_file(
 
     if not result["changes"] and guess_from_filename:
         # 标签存在但标题/演唱者等为空，从文件名补齐（不覆盖已有值）
-        from .filename_tags import guess_from_filename as _guess
+        from .filename_tags import guess_tags
 
-        filled = _apply_guess(audio, _guess(path))
+        guess, source, llm_error = guess_tags(
+            path, llm_config=llm_config, llm_cache_dir=llm_cache_dir,
+            _llm_fn=_llm_fn)
+        if llm_error:
+            result["llm_error"] = llm_error
+        filled = _apply_guess(audio, guess, source)
         if filled:
             result["changes"] = filled
 

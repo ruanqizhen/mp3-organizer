@@ -65,3 +65,46 @@ def test_garbled_filename_also_fixed():
 def test_empty_after_clean():
     r = g("[320K].mp3")
     assert r["title"] == "" and r["artist"] == ""
+
+
+def test_guess_tags_regex_wins_no_llm_call():
+    from mp3organizer.filename_tags import guess_tags
+
+    def boom(names):
+        raise AssertionError("正则已猜出，不该调用大模型")
+
+    guess, source, err = guess_tags("/m/周杰伦 - 夜曲.mp3", _llm_fn=boom)
+    assert (source, err) == ("regex", "")
+    assert (guess["artist"], guess["title"]) == ("周杰伦", "夜曲")
+
+
+def test_guess_tags_llm_fallback():
+    from mp3organizer.filename_tags import guess_tags
+
+    def fake_llm(names):
+        assert names == ["yq_zjl.mp3"]
+        return [{"title": "夜曲", "artist": "周杰伦", "album": "十一月的萧邦",
+                 "genre": "流行", "year": "2005", "confidence": 0.7}]
+
+    guess, source, err = guess_tags("/m/yq_zjl.mp3", _llm_fn=fake_llm)
+    assert (source, err) == ("llm", "")
+    assert (guess["artist"], guess["title"], guess["album"]) == (
+        "周杰伦", "夜曲", "十一月的萧邦")
+
+
+def test_guess_tags_llm_error_falls_back():
+    from mp3organizer.filename_tags import guess_tags
+
+    def bad_llm(names):
+        raise RuntimeError("network down")
+
+    guess, source, err = guess_tags("/m/yq_zjl.mp3", _llm_fn=bad_llm)
+    assert source == "regex"  # 大模型失败，退回正则的部分结果
+    assert "network down" in err
+    assert guess["title"] == "yq_zjl"
+
+
+def test_guess_tags_no_llm_configured():
+    from mp3organizer.filename_tags import guess_tags
+    guess, source, err = guess_tags("/m/yq_zjl.mp3")
+    assert (source, err) == ("regex", "")  # 未启用大模型时沿用旧规则

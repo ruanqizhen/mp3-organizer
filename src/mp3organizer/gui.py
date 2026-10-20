@@ -69,6 +69,8 @@ class App(tk.Tk):
         self._encodings = tk.StringVar(value=",".join(CANDIDATE_ENCODINGS))
         ttk.Entry(prow, textvariable=self._encodings, width=30).pack(side="left", padx=4)
 
+        self._build_llm_section(pad)
+
         runfrm = ttk.Frame(self)
         runfrm.pack(fill="x", **pad)
         self._start_btn = ttk.Button(runfrm, text="开始处理", command=self._start)
@@ -83,6 +85,72 @@ class App(tk.Tk):
 
         self._log = scrolledtext.ScrolledText(self, height=16, state="disabled")
         self._log.pack(fill="both", expand=True, **pad)
+        self._load_llm_settings()
+
+    def _build_llm_section(self, pad: dict) -> None:
+        """大模型猜标签设置区（OpenAI 兼容接口，用户自己配模型）。"""
+        frm = ttk.LabelFrame(self, text="大模型猜标签（可选）")
+        frm.pack(fill="x", **pad)
+        self._llm_enabled = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text="启用：文件名用规则猜不出时，调用大模型",
+                        variable=self._llm_enabled).pack(anchor="w", padx=8, pady=2)
+        self._llm_fields: dict[str, tk.StringVar] = {}
+        for key, label, default in (
+                ("base_url", "API 地址", "https://api.deepseek.com"),
+                ("api_key", "API Key", ""),
+                ("model", "模型名", "deepseek-chat")):
+            row = ttk.Frame(frm)
+            row.pack(fill="x", padx=8, pady=1)
+            ttk.Label(row, text=label, width=10).pack(side="left")
+            var = tk.StringVar(value=default)
+            ent = ttk.Entry(row, textvariable=var,
+                            show="*" if key == "api_key" else "")
+            ent.pack(side="left", fill="x", expand=True)
+            self._llm_fields[key] = var
+        ttk.Label(frm, text="Key 建议用环境变量 MP3ORGANIZER_LLM_API_KEY；"
+                            "本机 Ollama 填 http://localhost:11434/v1，Key 可空",
+                  foreground="gray").pack(anchor="w", padx=8, pady=2)
+
+    @staticmethod
+    def _llm_config_file() -> Path:
+        return Path.home() / ".config" / "mp3-organizer" / "llm.json"
+
+    def _load_llm_settings(self) -> None:
+        try:
+            import json
+            data = json.loads(self._llm_config_file().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        for key, var in self._llm_fields.items():
+            if data.get(key):
+                var.set(data[key])
+        self._llm_enabled.set(bool(data.get("enabled")))
+
+    def _save_llm_settings(self) -> None:
+        import json
+        data = {"enabled": self._llm_enabled.get()}
+        data.update({k: v.get().strip() for k, v in self._llm_fields.items()})
+        p = self._llm_config_file()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    def _llm_config_or_error(self):
+        """返回 (LLMConfig|None, 错误信息|None)。"""
+        if not self._llm_enabled.get():
+            return None, None
+        from .llm_tagger import LLMConfig
+        cfg = LLMConfig(
+            base_url=self._llm_fields["base_url"].get().strip()
+            or "https://api.deepseek.com",
+            api_key=self._llm_fields["api_key"].get().strip()
+            or os.environ.get("MP3ORGANIZER_LLM_API_KEY", ""),
+            model=self._llm_fields["model"].get().strip() or "deepseek-chat",
+        )
+        if not cfg.is_configured():
+            return None, "请填写 API 地址和模型名"
+        if cfg.needs_key():
+            return None, "请填写 API Key（或设置环境变量 MP3ORGANIZER_LLM_API_KEY）"
+        return cfg, None
 
     def _browse(self, entry: ttk.Entry) -> None:
         d = filedialog.askdirectory()
@@ -116,6 +184,11 @@ class App(tk.Tk):
         if not encodings:
             messagebox.showerror("错误", "编码尝试顺序不能为空")
             return
+        llm_config, llm_err = self._llm_config_or_error()
+        if llm_err:
+            messagebox.showerror("错误", llm_err)
+            return
+        self._save_llm_settings()
 
         self._running = True
         self._start_btn.configure(state="disabled")
@@ -125,6 +198,8 @@ class App(tk.Tk):
         self._log_line("开始处理：" + root)
         if self._vars["dry_run"].get():
             self._log_line("【试运行模式】不会修改任何文件，只生成报告")
+        if llm_config is not None:
+            self._log_line("大模型猜标签已启用（%s）" % llm_config.model)
 
         args = dict(
             dry_run=self._vars["dry_run"].get(),
@@ -136,6 +211,7 @@ class App(tk.Tk):
             do_cover=self._vars["do_cover"].get(),
             encodings=encodings,
             guess_from_filename=self._vars["guess"].get(),
+            llm_config=llm_config,
             min_score=min_score,
             report_html=self._report_path,
         )
@@ -194,13 +270,15 @@ class App(tk.Tk):
                 r.get("tag_status") in ("fixed", "guessed")
                 or r.get("integrity_status") in ("fixed", "broken", "unreadable")
                 or str(r.get("cover_status", "")).startswith("needs_review")
+                or r.get("llm_error")
             )
             if interesting and shown < 100:
-                self._log_line(
-                    "[%s/%s/%s] %s" % (
-                        r.get("tag_status"), r.get("integrity_status"),
-                        r.get("cover_status"), r["path"])
-                )
+                line = "[%s/%s/%s] %s" % (
+                    r.get("tag_status"), r.get("integrity_status"),
+                    r.get("cover_status"), r["path"])
+                if r.get("llm_error"):
+                    line += "（大模型调用失败，已回退：%s）" % r["llm_error"]
+                self._log_line(line)
                 shown += 1
         if shown >= 100:
             self._log_line("（仅显示前 100 条，完整清单见 HTML 报告）")
