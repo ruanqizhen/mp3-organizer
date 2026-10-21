@@ -10,3 +10,5 @@ _backup/
 _quarantine/
 report.html
 report.csv
+# 本地演示产物（demo-src/、demo-lib/ 等）
+/demo-*

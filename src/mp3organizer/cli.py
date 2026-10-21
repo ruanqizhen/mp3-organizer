@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 from . import __version__
@@ -12,6 +13,20 @@ from .organize import organize_file
 from .integrity import check_file, quarantine
 from .cover import process_file
 from .report import build_html, build_csv
+
+
+def _ensure_safe_console_output() -> None:
+    """控制台输出容错：GBK 等代码页遇到编不下的字符时降级显示，不抛异常。
+
+    终端打印的只是进度信息，精确的修复对照以 UTF-8 的 HTML/CSV 报告为准。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None:
+            continue
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:  # noqa: BLE001 - 输出流形态各异，容错失败也不应中断启动
+            continue
 
 
 def _add_llm_args(p: argparse.ArgumentParser) -> None:
@@ -355,6 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _ensure_safe_console_output()
     args = build_parser().parse_args(argv)
     # 空字符串表示“跳过该工具”
     for key in ("mp3val", "ffmpeg"):
