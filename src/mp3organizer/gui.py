@@ -206,7 +206,7 @@ class App(tk.Tk):
         self._llm_enabled = tk.BooleanVar(value=False)
         ttk.Checkbutton(frm, text="启用：文件名用规则猜不出时，调用大模型",
                         variable=self._llm_enabled).pack(anchor="w", padx=8, pady=2)
-        self._llm_verify = tk.BooleanVar(value=False)
+        self._llm_verify = tk.BooleanVar(value=True)
         ttk.Checkbutton(frm, text="优先用大模型校对标签（含文件名验证，生成规范标签）",
                         variable=self._llm_verify).pack(anchor="w", padx=8, pady=2)
         self._llm_fields: dict[str, tk.StringVar] = {}

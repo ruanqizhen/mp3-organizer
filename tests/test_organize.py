@@ -268,3 +268,42 @@ def test_target_path_personal_cleans_filename():
 def test_guess_by_rules_duet_with_ideographic_comma():
     from mp3organizer.categories import guess_by_rules
     assert guess_by_rules("张韶涵、王赫野", "篇章") == "华语.双人"
+
+
+def test_clean_display_name_strips_lyric_quote():
+    from mp3organizer.organize import clean_display_name
+    assert clean_display_name("若月亮沒來『若是晨風還沒來，晚風也可吹入懷』") == "若月亮沒來"
+    assert clean_display_name("夜曲「風雨」") == "夜曲「風雨」"  # 无标点，保守保留
+
+
+def test_clean_display_name_artist_underscore():
+    from mp3organizer.organize import clean_display_name
+    assert clean_display_name("王宇宙Leto_喬浚丞", is_artist=True) == "王宇宙Leto、喬浚丞"
+    # 标题不碰无空格下划线
+    assert clean_display_name("王宇宙Leto_喬浚丞") == "王宇宙Leto_喬浚丞"
+
+
+def test_target_path_personal_user_sky_case():
+    """用户真实案例：频道名演唱者 + 备选标题 + 歌词引用（不开大模型的兜底）。"""
+    from mp3organizer.organize import target_path_personal
+    info = {"path": "/m/x.mp3",
+            "title": "若月亮沒來 (若是月亮還沒來) - 王宇宙Leto_喬浚丞"
+                     "『若是晨風還沒來，晚風也可吹入懷』【動態歌詞】",
+            "artist": "SKY Music Channel"}
+    p = target_path_personal("/lib", info, "待分类", False)
+    assert "動態歌詞" not in p.name
+    assert "若是晨風還沒來" not in p.name  # 歌词引用已删
+    assert p.name.startswith("SKY Music Channel - ")
+
+
+def test_llm_verify_enabled_defaults():
+    import argparse
+    from mp3organizer.cli import _llm_verify_enabled
+    ns = argparse.Namespace(llm=True, llm_verify=False, no_llm_verify=False)
+    assert _llm_verify_enabled(ns) is True  # --llm 即默认开校对
+    ns = argparse.Namespace(llm=True, llm_verify=False, no_llm_verify=True)
+    assert _llm_verify_enabled(ns) is False  # --no-llm-verify 可关
+    ns = argparse.Namespace(llm=False, llm_verify=True, no_llm_verify=False)
+    assert _llm_verify_enabled(ns) is True  # 单独 --llm-verify 也开
+    ns = argparse.Namespace(llm=False, llm_verify=False, no_llm_verify=False)
+    assert _llm_verify_enabled(ns) is False
