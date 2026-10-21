@@ -4,12 +4,18 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections import Counter
 from pathlib import Path
 
 from . import __version__
 from .scanner import find_mp3_files, read_info
 from .encoding import fix_file, CANDIDATE_ENCODINGS
-from .organize import organize_file
+from .organize import (
+    organize_file, use_artist_subdir, TEMPLATE_PERSONAL, TEMPLATE_CLASSIC,
+)
+from .categories import (
+    learn_from_library, classify, normalize_artist, PENDING_CATEGORY,
+)
 from .integrity import check_file, quarantine
 from .cover import process_file
 from .report import build_html, build_csv
@@ -31,7 +37,7 @@ def _ensure_safe_console_output() -> None:
 
 def _add_llm_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--llm", action="store_true",
-                   help="启用大模型猜标签（文件名用规则猜不出时回退到大模型）")
+                   help="启用大模型（猜标签、定归类分类时兜底）")
     p.add_argument("--llm-base-url", default=None,
                    help="大模型 API 地址（OpenAI 兼容），默认取环境变量 MP3ORGANIZER_LLM_BASE_URL，否则为 DeepSeek")
     p.add_argument("--llm-api-key", default=None,
@@ -123,13 +129,34 @@ def cmd_fix_tags(args: argparse.Namespace) -> int:
 
 
 def cmd_organize(args: argparse.Namespace) -> int:
+    infos = [(p, read_info(p)) for p in find_mp3_files(args.root)]
+    personal = args.template == TEMPLATE_PERSONAL
+    learned = learn_from_library(args.library) if personal else {}
+    counts: Counter = Counter()
+    if personal:
+        for _, info in infos:
+            key = normalize_artist(info.get("artist"))
+            if key:
+                counts[key] += 1
+    llm_config = _llm_config_from_args(args)
     records = []
-    for p in find_mp3_files(args.root):
-        info = read_info(p)
-        r = organize_file(p, args.library, info, dry_run=args.dry_run)
+    for p, info in infos:
+        kwargs: dict = {"template": args.template}
+        if personal:
+            category, _, llm_err = classify(info, learned, llm_config=llm_config)
+            if llm_err:
+                print(f"  大模型分类失败（已放待分类）：{llm_err}")
+            key = normalize_artist(info.get("artist"))
+            kwargs.update(category=category, use_subdir=use_artist_subdir(
+                args.library, category, info.get("artist") or "",
+                counts.get(key, 0), args.subdir_threshold))
+        r = organize_file(p, args.library, info, dry_run=args.dry_run, **kwargs)
+        new_path = r["dest"]
+        if r.get("category") == PENDING_CATEGORY:
+            new_path += "（待确认分类）"
         records.append({"path": r["src"], "tag_status": "", "tag_changes": [],
                         "integrity_status": "", "cover_status": "",
-                        "new_path": r["dest"]})
+                        "new_path": new_path})
     print(f"归类 {len(records)} 个文件 → {args.library}" + ("（试运行）" if args.dry_run else ""))
     _emit_reports(records, args)
     return 0
@@ -191,6 +218,7 @@ def cmd_all(args: argparse.Namespace) -> int:
         encodings=encodings, force_encoding=args.force_encoding,
         guess_from_filename=args.guess_from_filename,
         llm_config=_llm_config_from_args(args),
+        template=args.template, subdir_threshold=args.subdir_threshold,
         fix_streams=not args.no_fix, mp3val_exe=args.mp3val, ffmpeg_exe=args.ffmpeg,
         min_score=args.min_score, report_html=args.report, report_csv=args.report_csv,
         progress=_progress,
@@ -270,6 +298,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
         encodings=encodings, force_encoding=args.force_encoding,
         guess_from_filename=args.guess_from_filename,
         llm_config=_llm_config_from_args(args),
+        template=args.template, subdir_threshold=args.subdir_threshold,
         merge_mode=True, on_duplicate=args.on_duplicate,
         fix_streams=not args.no_fix, mp3val_exe=args.mp3val, ffmpeg_exe=args.ffmpeg,
         min_score=args.min_score, report_html=args.report, report_csv=args.report_csv,
@@ -298,6 +327,16 @@ def cmd_merge(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_template_args(s: argparse.ArgumentParser) -> None:
+    """organize/all/merge 共用的归类模板参数。"""
+    s.add_argument("--template", default=TEMPLATE_PERSONAL,
+                   choices=(TEMPLATE_PERSONAL, TEMPLATE_CLASSIC),
+                   help="归类模板：personal 我的方式（语言.性别/演唱者），"
+                        "classic 经典方式（类型/演唱者/专辑）")
+    s.add_argument("--subdir-threshold", type=int, default=3,
+                   help="personal 模板：同演唱者达到该数量才建子目录")
+
+
 def _add_pipeline_args(s: argparse.ArgumentParser) -> None:
     """all/merge 共用的流水线参数。"""
     _add_common(s)
@@ -311,6 +350,7 @@ def _add_pipeline_args(s: argparse.ArgumentParser) -> None:
     s.add_argument("--guess-from-filename", action="store_true",
                    help="无标签时从文件名构建标签；有标签但标题/演唱者为空时补齐")
     _add_llm_args(s)
+    _add_template_args(s)
     s.add_argument("--min-score", type=float, default=0.75)
     s.add_argument("--cache-dir", default=None)
 
@@ -331,9 +371,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="无标签时从文件名构建标签；有标签但标题/演唱者为空时补齐")
     _add_llm_args(s)
 
-    s = sub.add_parser("organize", help="按类型/演唱者归类到音乐库")
+    s = sub.add_parser("organize", help="按语言.性别/演唱者归类到音乐库")
     _add_common(s)
     s.add_argument("library", help="目标音乐库根目录")
+    _add_template_args(s)
+    _add_llm_args(s)
 
     s = sub.add_parser("check", help="完整性检查/修复/隔离")
     _add_common(s)

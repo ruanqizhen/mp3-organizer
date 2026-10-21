@@ -1,11 +1,15 @@
 """organize 模块测试。"""
 from pathlib import Path
 
+from mp3organizer.categories import PENDING_CATEGORY
 from mp3organizer.organize import (
     normalize_genre,
     sanitize,
     target_path,
+    target_path_personal,
     organize_file,
+    use_artist_subdir,
+    TEMPLATE_CLASSIC,
     UNKNOWN_GENRE,
     UNKNOWN_ARTIST,
 )
@@ -70,7 +74,8 @@ def test_organize_file_collision_never_overwrites(tmp_path):
     for i in range(2):
         src = tmp_path / f"s{i}.mp3"
         src.write_bytes(f"fake{i}".encode())
-        organize_file(src, lib, {**info, "path": str(src)})
+        organize_file(src, lib, {**info, "path": str(src)},
+                        template=TEMPLATE_CLASSIC)
     dests = sorted((lib / "Pop" / "周杰伦").glob("*.mp3"))
     # 注意：按 Unicode 码点排序，空格(U+0020) < 点号(U+002E)
     assert [d.name for d in dests] == ["夜曲 (1).mp3", "夜曲.mp3"]
@@ -114,7 +119,7 @@ def test_merge_file_skips_duplicate(tmp_path):
     src = tmp_path / "src" / "夜曲.mp3"
     src.parent.mkdir(parents=True)
     _stream(src, 20)  # 内容相同 → 重复
-    r = merge_file(src, lib, _info())
+    r = merge_file(src, lib, _info(), template=TEMPLATE_CLASSIC)
     assert r["status"] == "skipped_duplicate"
     assert src.exists()  # 没被移走
 
@@ -127,7 +132,7 @@ def test_merge_file_renames_when_different(tmp_path):
     src = tmp_path / "src" / "夜曲.mp3"
     src.parent.mkdir(parents=True)
     _stream(src, 30)  # 内容不同 → 改名并入
-    r = merge_file(src, lib, _info())
+    r = merge_file(src, lib, _info(), template=TEMPLATE_CLASSIC)
     assert r["status"] == "renamed"
     assert r["dest"].endswith("夜曲 (1).mp3")
     assert Path(r["dest"]).exists()
@@ -142,7 +147,8 @@ def test_merge_file_replace(tmp_path):
     src = tmp_path / "src" / "夜曲.mp3"
     src.parent.mkdir(parents=True)
     _stream(src, 30)
-    r = merge_file(src, lib, _info(), on_duplicate="replace")
+    r = merge_file(src, lib, _info(), on_duplicate="replace",
+                   template=TEMPLATE_CLASSIC)
     assert r["status"] == "replaced"
     assert Path(r["dest"]).stat().st_size == len(FRAME) * 30
 
@@ -152,10 +158,67 @@ def test_merge_file_moves_new(tmp_path):
     src = tmp_path / "src" / "红豆.mp3"
     src.parent.mkdir(parents=True)
     _stream(src, 20)
-    r = merge_file(src, lib, _info(title="红豆", artist="王菲"))
+    r = merge_file(src, lib, _info(title="红豆", artist="王菲"),
+                   template=TEMPLATE_CLASSIC)
     assert r["status"] == "moved"
     assert Path(r["dest"]).exists()
 
 
 def test_unique_path():
     assert unique_path(Path("/nonexistent/x.mp3")) == Path("/nonexistent/x.mp3")
+
+
+# ---- personal 模板 ----
+
+def test_target_path_personal_subdir():
+    info = {"path": "/m/x.mp3", "title": "夜曲", "artist": "周杰伦"}
+    got = target_path_personal("/lib", info, "华语.男", True)
+    assert got == Path("/lib/华语.男/周杰伦/周杰伦 - 夜曲.mp3")
+
+
+def test_target_path_personal_flat_and_no_artist():
+    info = {"path": "/m/x.mp3", "title": "Hello", "artist": "Adele"}
+    assert target_path_personal("/lib", info, "英语", False) == \
+        Path("/lib/英语/Adele - Hello.mp3")
+    info2 = {"path": "/m/Chiara.mp3", "title": "Chiara", "artist": ""}
+    assert target_path_personal("/lib", info2, "其它语言", True) == \
+        Path("/lib/其它语言/Chiara.mp3")  # 无演唱者：只用标题，不建目录
+
+
+def test_target_path_personal_pending_fallback():
+    info = {"path": "/m/x.mp3", "title": "夜曲", "artist": "周杰伦"}
+    got = target_path_personal("/lib", info, "", False)
+    assert got == Path(f"/lib/{PENDING_CATEGORY}/周杰伦 - 夜曲.mp3")
+
+
+def test_use_artist_subdir(tmp_path):
+    lib = tmp_path / "lib"
+    assert use_artist_subdir(lib, "华语.男", "周杰伦", 3, 3)
+    assert not use_artist_subdir(lib, "华语.男", "周杰伦", 2, 3)
+    assert not use_artist_subdir(lib, "华语.男", "", 9, 3)
+    (lib / "华语.男" / "周杰伦").mkdir(parents=True)
+    assert use_artist_subdir(lib, "华语.男", "周杰伦", 1, 3)  # 库里已有目录
+
+
+def test_organize_file_personal_moves(tmp_path):
+    src = tmp_path / "src" / "a.mp3"
+    src.parent.mkdir()
+    src.write_bytes(b"fake")
+    info = {"path": str(src), "title": "夜曲", "artist": "周杰伦"}
+    res = organize_file(src, tmp_path / "lib", info,
+                        category="华语.男", use_subdir=True)
+    assert res["status"] == "moved"
+    assert res["category"] == "华语.男"
+    dest = tmp_path / "lib" / "华语.男" / "周杰伦" / "周杰伦 - 夜曲.mp3"
+    assert dest.exists() and not src.exists()
+
+
+def test_merge_file_personal_moves_new(tmp_path):
+    lib = tmp_path / "lib"
+    src = tmp_path / "src" / "红豆.mp3"
+    src.parent.mkdir(parents=True)
+    _stream(src, 20)
+    r = merge_file(src, lib, _info(title="红豆", artist="王菲"),
+                   category="华语.女", use_subdir=False)
+    assert r["status"] == "moved"
+    assert Path(r["dest"]) == lib / "华语.女" / "王菲 - 红豆.mp3"

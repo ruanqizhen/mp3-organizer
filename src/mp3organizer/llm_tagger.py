@@ -14,6 +14,8 @@ from pathlib import Path
 
 import requests
 
+from .categories import normalize_artist
+
 
 class LLMError(RuntimeError):
     """调用大模型失败。"""
@@ -208,3 +210,56 @@ def parse_filenames(
     """解析杂乱文件名 → [{artist, title, confidence}]，用于整理标准文件名。"""
     return _query_cached(filenames, config, RENAME_SYSTEM_PROMPT, "llm_rename.json",
                          cache_dir=cache_dir, request_fn=request_fn)
+
+
+CLASSIFY_SYSTEM_PROMPT = """你是中文音乐收藏整理助手。用户会给你一批演唱者（JSON 数组，每项 {"artist": 演唱者, "title": 代表作}），请判断每位演唱者属于哪个分类。
+
+分类只能是以下 7 个之一：
+- 华语.男：演唱中文歌的男歌手
+- 华语.女：演唱中文歌的女歌手
+- 华语.组合：三人及以上的华语乐队/组合
+- 华语.双人：华语双人对唱（演唱者栏是两个人）
+- 英语：演唱英文歌的歌手/组合
+- 纯音乐：演奏纯音乐（无演唱）的音乐人/乐团
+- 其它语言：日韩、俄语、法语等非中英语言的歌手
+
+要求：
+1. 只返回 JSON 数组，与输入顺序一一对应，不要输出其他任何内容。
+2. 每项包含字段：category（必须是以上 7 个之一）、confidence（0~1）。
+3. 以演唱者母语/主要作品语言判断；拿不准时选最可能的一项并降低 confidence。
+
+示例：
+输入：[{"artist": "周杰伦", "title": "夜曲"}, {"artist": "Adele", "title": "Hello"}]
+输出：[{"category": "华语.男", "confidence": 0.99}, {"category": "英语", "confidence": 0.99}]
+"""
+
+
+def classify_artists(
+    pairs: list[tuple[str, str]],
+    config: LLMConfig,
+    *,
+    cache_dir: str | Path | None = None,
+    request_fn=None,
+) -> list[dict]:
+    """演唱者 → 语言.性别分类。pairs 为 [(artist, title)]，按演唱者缓存。"""
+    if not config.is_configured():
+        raise LLMError("大模型未配置：需要 API 地址和模型名")
+    keys = [normalize_artist(a) or ("title:" + t.strip().casefold())
+            for a, t in pairs]
+    cache = _load_cache(cache_dir, "llm_classify.json")
+    seen = set(cache)
+    todo = []
+    for i, k in enumerate(keys):
+        if k not in seen:  # 同一批里同一演唱者只问一次
+            seen.add(k)
+            todo.append(i)
+    bs = max(1, config.batch_size)
+    for s in range(0, len(todo), bs):
+        batch_idx = todo[s:s + bs]
+        batch = [{"artist": pairs[i][0], "title": pairs[i][1]}
+                 for i in batch_idx]
+        results = _query_batch(batch, config, CLASSIFY_SYSTEM_PROMPT, request_fn)
+        for i, item in zip(batch_idx, results):
+            cache[keys[i]] = item
+        _save_cache(cache_dir, "llm_classify.json", cache)
+    return [cache.get(k, {}) for k in keys]

@@ -52,7 +52,7 @@ def test_pipeline_real_run_organizes(tmp_path):
         do_cover=False, mp3val_exe=None, ffmpeg_exe=None,
         backup_dir=tmp_path / "bak",
     )
-    dest = tmp_path / "lib" / "未知类型" / "周杰伦" / "夜曲.mp3"
+    dest = tmp_path / "lib" / "待分类" / "周杰伦 - 夜曲.mp3"
     assert dest.exists()
     reread = ID3(str(dest))
     assert reread["TIT2"].text == ["夜曲"]
@@ -85,7 +85,7 @@ def test_pipeline_guess_from_filename(tmp_path):
     )
     rec = result["records"][0]
     assert rec["tag_status"] == "guessed"
-    assert (tmp_path / "lib" / "未知类型" / "王菲" / "红豆.mp3").exists()
+    assert (tmp_path / "lib" / "待分类" / "王菲 - 红豆.mp3").exists()
 
 
 def test_pipeline_requires_library_when_organizing(tmp_path):
@@ -126,8 +126,8 @@ def test_pipeline_merge_mode_skips_duplicate(tmp_path):
     _make_clean_mp3(src / "夜曲.mp3", "夜曲", "周杰伦")
     _make_clean_mp3(src / "红豆.mp3", "红豆", "王菲")
     lib = tmp_path / "lib"
-    # 音乐库里已经有一份一模一样的夜曲
-    dup = lib / "未知类型" / "周杰伦" / "夜曲.mp3"
+    # 音乐库里已经有一份一模一样的夜曲（现有目录同时教会工具分类）
+    dup = lib / "华语.男" / "周杰伦" / "周杰伦 - 夜曲.mp3"
     dup.parent.mkdir(parents=True)
     shutil.copy2(src / "夜曲.mp3", dup)
 
@@ -137,7 +137,56 @@ def test_pipeline_merge_mode_skips_duplicate(tmp_path):
     )
     by_name = {Path(r["path"]).name: r for r in result["records"]}
     assert by_name["夜曲.mp3"]["organize_status"] == "skipped_duplicate"
+    assert by_name["夜曲.mp3"]["category"] == "华语.男"
     assert (src / "夜曲.mp3").exists()  # 重复的没被移走
     assert by_name["红豆.mp3"]["organize_status"] == "moved"
-    assert (lib / "未知类型" / "王菲" / "红豆.mp3").exists()
+    assert (lib / "待分类" / "王菲 - 红豆.mp3").exists()
     assert not (src / "红豆.mp3").exists()
+
+
+def test_pipeline_classic_template(tmp_path):
+    """classic 模板保持旧行为：类型/演唱者/标题。"""
+    src = tmp_path / "src"
+    src.mkdir()
+    _make_mp3(src / "a.mp3", _garbled("夜曲"), _garbled("周杰伦"))
+    result = run_pipeline(
+        src, tmp_path / "lib", template="classic",
+        do_cover=False, mp3val_exe=None, ffmpeg_exe=None,
+    )
+    assert (tmp_path / "lib" / "未知类型" / "周杰伦" / "夜曲.mp3").exists()
+    assert result["records"][0]["organize_status"] == "moved"
+
+
+def test_pipeline_personal_threshold(tmp_path):
+    """同演唱者达到阈值建目录，零散的放分类顶层。"""
+    src = tmp_path / "src"
+    src.mkdir()
+    for i in range(3):
+        _make_clean_mp3(src / f"zjl{i}.mp3", f"歌{i}", "周杰伦")
+    _make_clean_mp3(src / "solo.mp3", "红豆", "王菲")
+    run_pipeline(
+        src, tmp_path / "lib", do_cover=False,
+        mp3val_exe=None, ffmpeg_exe=None, subdir_threshold=3,
+    )
+    lib = tmp_path / "lib"
+    assert (lib / "待分类" / "周杰伦" / "周杰伦 - 歌0.mp3").exists()
+    assert (lib / "待分类" / "王菲 - 红豆.mp3").exists()
+
+
+def test_pipeline_dry_run_uses_fixed_tags_for_organize(tmp_path):
+    """试运行不写盘，但归类按"修复后"的标签算，与正式跑一致。"""
+    src = tmp_path / "src"
+    src.mkdir()
+    p = src / "a.mp3"
+    _make_mp3(p, _garbled("童话"), _garbled("光良"))
+    lib = tmp_path / "lib"
+    (lib / "华语.男" / "光良").mkdir(parents=True)
+    _make_clean_mp3(lib / "华语.男" / "光良" / "seed.mp3", "约", "光良")
+    result = run_pipeline(
+        src, lib, dry_run=True, do_cover=False,
+        mp3val_exe=None, ffmpeg_exe=None,
+    )
+    rec = result["records"][0]
+    assert rec["tag_status"] == "fixed"
+    assert rec["new_path"] == str(lib / "华语.男" / "光良" / "光良 - 童话.mp3")
+    assert p.exists()  # 试运行：源文件还在

@@ -143,3 +143,20 @@ def test_parse_filenames(tmp_path):
     assert not (tmp_path / "llm_tags.json").exists()
     # prompt 里要求忽略噪音
     assert "噪音" in calls[0]["payload"]["messages"][0]["content"]
+
+
+def test_classify_artists_caches_by_artist(tmp_path):
+    from mp3organizer.llm_tagger import classify_artists
+    body = [{"category": "华语.男", "confidence": 0.99}]
+    fake_post, calls = _fake_post(
+        response_obj={"choices": [{"message": {"content": json.dumps(body)}}]})
+    pairs = [("周杰伦", "夜曲"), ("周杰伦", "晴天")]  # 同一演唱者只问一次
+    res = classify_artists(pairs, CFG, cache_dir=tmp_path, request_fn=fake_post)
+    assert [r["category"] for r in res] == ["华语.男", "华语.男"]
+    assert len(calls) == 1
+    res2 = classify_artists(pairs, CFG, cache_dir=tmp_path, request_fn=fake_post)
+    assert res2 == res
+    assert len(calls) == 1  # 命中缓存
+    assert (tmp_path / "llm_classify.json").exists()
+    assert not (tmp_path / "llm_tags.json").exists()
+    assert "华语.男" in calls[0]["payload"]["messages"][0]["content"]

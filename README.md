@@ -3,7 +3,7 @@
 Windows 老 MP3 批量整理工具。很多年前存的 MP3，标签乱码、文件夹混乱、有坏文件、没封面——这个工具一条龙处理：
 
 1. **编码修复**：把误标为 latin1 的 GBK/Big5 等标签还原为 Unicode，统一写回 ID3v2.4 + UTF-8
-2. **自动归类**：按 `类型 / 演唱者 / 演唱者 - 专辑` 整理到音乐库目录
+2. **自动归类**：按 `语言.性别 / 演唱者` 整理（从现有音乐库学习分类，`--template classic` 切回经典方式）
 3. **完整性检查**：mutagen 粗检 → mp3val 修复 → ffmpeg 终检；修不好的改名 `[损坏]` 隔离
 4. **专辑封面**：MusicBrainz + Cover Art Archive 自动搜封面并嵌入（低分匹配人工确认，iTunes 回退）
 
@@ -49,7 +49,8 @@ python -m mp3organizer all D:\老音乐 D:\音乐库 ^
 python -m mp3organizer scan D:\老音乐                 # 扫描列出
 python -m mp3organizer fix-tags D:\老音乐 --dry-run   # 只修标签
 python -m mp3organizer fix-tags D:\老音乐 --guess-from-filename  # 无标签时从文件名建标签
-python -m mp3organizer organize D:\老音乐 D:\音乐库   # 只归类
+python -m mp3organizer organize D:\老音乐 D:\音乐库   # 只归类（学习音乐库现有分类）
+python -m mp3organizer organize D:\老音乐 D:\音乐库 --template classic  # 经典 类型/演唱者 方式
 python -m mp3organizer check D:\老音乐 --quarantine-dir D:\待处理
 python -m mp3organizer cover D:\音乐库 --min-score 0.75
 ```
@@ -121,6 +122,9 @@ python -m mp3organizer merge D:\未整理 D:\音乐库 --guess-from-filename --l
 - 判重规则：目标位置已存在**文件大小相同且时长相差 2 秒内**的文件 → 视为重复，跳过
 - `--on-duplicate`：`skip` 跳过重复（默认）；`rename` 改名并入；`replace` 覆盖
 - 图形界面里勾选"合并模式：音乐库已有同曲目时跳过（去重并入）"效果相同
+- 归类模板默认 personal：`音乐库/语言.性别/[演唱者/]演唱者 - 标题.mp3`，从音乐库现有结构自动学习"演唱者→分类"；`--template classic` 切回经典方式
+- `--subdir-threshold N`（默认 3）：同演唱者达到 N 首才建子目录，否则放分类顶层；库里已有该演唱者目录时直接并入
+- 定不了分类的进"待分类"并在报告里标注，人工拖到正确位置后下次自动记住；加 `--llm` 可让大模型定语言和性别
 
 推荐流程：先 `rename` 把文件名理顺，再 `merge` 并入音乐库。
 

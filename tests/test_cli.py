@@ -33,3 +33,24 @@ def test_safe_console_tolerates_plain_streams(monkeypatch):
     monkeypatch.setattr(sys, "stdout", io.StringIO())
     monkeypatch.setattr(sys, "stderr", io.StringIO())
     _ensure_safe_console_output()
+
+
+def _make_tagged_mp3(path, title, artist):
+    from mutagen.id3 import ID3, TIT2, TPE1, Encoding
+    tag = ID3()
+    tag.add(TIT2(encoding=Encoding.UTF8, text=[title]))
+    tag.add(TPE1(encoding=Encoding.UTF8, text=[artist]))
+    tag.save(str(path))
+
+
+def test_organize_cli_personal_default(tmp_path):
+    _make_tagged_mp3(tmp_path / "a.mp3", "Hello", "Adele")
+    assert main(["organize", str(tmp_path), str(tmp_path / "lib")]) == 0
+    assert (tmp_path / "lib" / "英语" / "Adele - Hello.mp3").exists()
+
+
+def test_organize_cli_classic_flag(tmp_path):
+    _make_tagged_mp3(tmp_path / "a.mp3", "Hello", "Adele")
+    assert main(["organize", str(tmp_path), str(tmp_path / "lib"),
+                 "--template", "classic"]) == 0
+    assert (tmp_path / "lib" / "未知类型" / "Adele" / "Hello.mp3").exists()

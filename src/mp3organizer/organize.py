@@ -1,10 +1,10 @@
-"""按 类型 / 演唱者 / 专辑 把 MP3 归类到子文件夹。
+"""MP3 归类到子文件夹，两种模板：
 
-默认结构：
-    <音乐库>/<类型>/<演唱者>/<演唱者 - 专辑>/<曲名>.mp3
-无专辑信息时：
-    <音乐库>/<类型>/<演唱者>/<曲名>.mp3
-缺失的类型/演唱者归入 “未知类型” / “未知演唱者”，便于事后在报告里人工补。
+personal（默认）：<音乐库>/<语言.性别>/[<演唱者>/]<演唱者 - 标题>.mp3
+    分类由 categories 模块定（现有库学习→规则→大模型→待分类）；
+    同演唱者达到阈值或目标下已有该目录时建子目录，否则放分类顶层。
+classic：<音乐库>/<类型>/<演唱者>/<演唱者 - 专辑>/<曲名>.mp3
+    （无专辑时省去专辑层；缺失的类型/演唱者归入"未知类型"/"未知演唱者"）。
 """
 from __future__ import annotations
 
@@ -12,8 +12,13 @@ import re
 import shutil
 from pathlib import Path
 
+from .categories import PENDING_CATEGORY
+
 UNKNOWN_GENRE = "未知类型"
 UNKNOWN_ARTIST = "未知演唱者"
+
+TEMPLATE_PERSONAL = "personal"
+TEMPLATE_CLASSIC = "classic"
 
 # ID3v1 标准类型表（含 Winamp 扩展到 147）
 ID3V1_GENRES = [
@@ -88,22 +93,64 @@ def target_path(library: str | Path, info: dict) -> Path:
     return library / genre / artist / f"{title}{ext}"
 
 
+def use_artist_subdir(library: str | Path, category: str, artist: str,
+                      count: int, threshold: int) -> bool:
+    """个人模板：同批同演唱者达到阈值，或目标下已有该演唱者目录 → 用子目录。"""
+    artist = (artist or "").strip()
+    if not artist:
+        return False
+    if count >= threshold:
+        return True
+    return (Path(library) / sanitize(category) / sanitize(artist)).is_dir()
+
+
+def target_path_personal(library: str | Path, info: dict,
+                         category: str, use_subdir: bool) -> Path:
+    """个人模板目标路径（不触碰文件系统）。
+
+    <音乐库>/<语言.性别>/[<演唱者>/]<演唱者 - 标题>.mp3；
+    无演唱者时文件名只用标题，且不建子目录。
+    """
+    library = Path(library)
+    category = sanitize(category or PENDING_CATEGORY)
+    raw_artist = (info.get("artist") or "").strip()
+    artist = sanitize(raw_artist) if raw_artist else ""
+    title = sanitize(info.get("title") or Path(info.get("path", "未知")).stem)
+    ext = Path(info.get("path", "")).suffix or ".mp3"
+    filename = f"{artist} - {title}{ext}" if artist else f"{title}{ext}"
+    if use_subdir and artist:
+        return library / category / artist / filename
+    return library / category / filename
+
+
 def organize_file(
-    src: str | Path, library: str | Path, info: dict, *, dry_run: bool = False
+    src: str | Path, library: str | Path, info: dict, *,
+    dry_run: bool = False,
+    template: str = TEMPLATE_PERSONAL,
+    category: str | None = None,
+    use_subdir: bool = False,
 ) -> dict:
     """把文件移动到归类目录；目标已存在时自动加 (1)/(2)… 后缀，绝不覆盖。
 
-    返回 dict：src / dest / status（moved|dry_run）。
+    template: personal（默认，语言.性别/演唱者，需调用方定好 category /
+              use_subdir）或 classic（类型/演唱者/专辑）。
+    返回 dict：src / dest / status（moved|dry_run）/ category。
     """
     src = Path(src)
-    dest = target_path(library, info)
+    if template == TEMPLATE_CLASSIC:
+        dest = target_path(library, info)
+        category = ""
+    else:
+        category = category or PENDING_CATEGORY
+        dest = target_path_personal(library, info, category, use_subdir)
     if dest.exists():
         stem, suffix = dest.stem, dest.suffix
         i = 1
         while dest.with_name(f"{stem} ({i}){suffix}").exists():
             i += 1
         dest = dest.with_name(f"{stem} ({i}){suffix}")
-    result = {"src": str(src), "dest": str(dest), "status": "dry_run"}
+    result = {"src": str(src), "dest": str(dest), "status": "dry_run",
+              "category": category}
     if dry_run:
         return result
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -149,6 +196,9 @@ def merge_file(
     *,
     on_duplicate: str = "skip",
     dry_run: bool = False,
+    template: str = TEMPLATE_PERSONAL,
+    category: str | None = None,
+    use_subdir: bool = False,
 ) -> dict:
     """归类并合并到已有音乐库（去重）。
 
@@ -156,9 +206,15 @@ def merge_file(
                   "rename"（直接改名并入）、"replace"（覆盖目标）。
     返回 {"src", "dest", "status"}，
     status: moved | skipped_duplicate | renamed | replaced | dry_run。
+    template / category / use_subdir 同 organize_file。
     """
     src = Path(src)
-    dest = target_path(library, info)
+    if template == TEMPLATE_CLASSIC:
+        dest = target_path(library, info)
+        category = ""
+    else:
+        category = category or PENDING_CATEGORY
+        dest = target_path_personal(library, info, category, use_subdir)
     if dest.exists():
         if on_duplicate == "skip" and _is_duplicate(src, dest):
             action = "skipped_duplicate"
@@ -171,7 +227,7 @@ def merge_file(
         action = "moved"
     result = {"src": str(src), "dest": str(dest),
               "status": "dry_run" if dry_run else action,
-              "action": action}
+              "action": action, "category": category}
     if dry_run or action == "skipped_duplicate":
         return result
     dest.parent.mkdir(parents=True, exist_ok=True)

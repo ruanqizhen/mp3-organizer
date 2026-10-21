@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover
 
 from .pipeline import run_pipeline, PHASE_NAMES
 from .encoding import CANDIDATE_ENCODINGS
+from .organize import TEMPLATE_PERSONAL, TEMPLATE_CLASSIC
 
 
 class App(tk.Tk):
@@ -69,6 +70,18 @@ class App(tk.Tk):
         ttk.Label(prow, text="编码尝试顺序").pack(side="left", padx=(12, 0))
         self._encodings = tk.StringVar(value=",".join(CANDIDATE_ENCODINGS))
         ttk.Entry(prow, textvariable=self._encodings, width=30).pack(side="left", padx=4)
+
+        trow = ttk.Frame(opts)
+        trow.pack(fill="x", padx=8, pady=2)
+        ttk.Label(trow, text="归类模板").pack(side="left")
+        self._template = tk.StringVar(value=TEMPLATE_PERSONAL)
+        ttk.Radiobutton(trow, text="我的方式", variable=self._template,
+                        value=TEMPLATE_PERSONAL).pack(side="left")
+        ttk.Radiobutton(trow, text="经典方式", variable=self._template,
+                        value=TEMPLATE_CLASSIC).pack(side="left")
+        ttk.Label(trow, text="同演唱者≥N首建子目录").pack(side="left", padx=(12, 0))
+        self._subdir_threshold = tk.StringVar(value="3")
+        ttk.Entry(trow, textvariable=self._subdir_threshold, width=4).pack(side="left", padx=4)
 
         self._build_llm_section(pad)
 
@@ -181,6 +194,13 @@ class App(tk.Tk):
         except ValueError:
             messagebox.showerror("错误", "匹配分阈值必须是数字")
             return
+        try:
+            subdir_threshold = int(self._subdir_threshold.get())
+            if subdir_threshold < 1:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("错误", "建子目录阈值必须是正整数")
+            return
         encodings = tuple(e.strip() for e in self._encodings.get().split(",") if e.strip())
         if not encodings:
             messagebox.showerror("错误", "编码尝试顺序不能为空")
@@ -201,6 +221,10 @@ class App(tk.Tk):
             self._log_line("【试运行模式】不会修改任何文件，只生成报告")
         if llm_config is not None:
             self._log_line("大模型猜标签已启用（%s）" % llm_config.model)
+        if self._vars["do_organize"].get():
+            self._log_line("归类模板：%s" % (
+                "我的方式（语言.性别/演唱者）"
+                if self._template.get() == TEMPLATE_PERSONAL else "经典方式"))
 
         args = dict(
             dry_run=self._vars["dry_run"].get(),
@@ -214,6 +238,8 @@ class App(tk.Tk):
             guess_from_filename=self._vars["guess"].get(),
             llm_config=llm_config,
             merge_mode=self._vars["merge_mode"].get(),
+            template=self._template.get(),
+            subdir_threshold=subdir_threshold,
             min_score=min_score,
             report_html=self._report_path,
         )
