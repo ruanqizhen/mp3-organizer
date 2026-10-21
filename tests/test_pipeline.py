@@ -208,7 +208,8 @@ def test_pipeline_stop_event_aborts_early(tmp_path):
 
 
 def test_pipeline_stop_mid_run_flushes_partial(tmp_path):
-    """跑一半停止：已动过标签/检查的文件进报告并标 stopped。"""
+    """跑一半停止：文件是原子单位——当前文件做完所有步骤后停下，
+    没轮到的文件不进报告。"""
     import threading
     src = tmp_path / "src"
     src.mkdir()
@@ -226,12 +227,13 @@ def test_pipeline_stop_mid_run_flushes_partial(tmp_path):
     assert result["stopped"] is True
     assert len(result["records"]) == 1
     rec = result["records"][0]
-    assert rec["organize_status"] == "stopped"
-    assert "cover_status" not in rec  # do_cover=False，本来就没有
+    assert Path(rec["path"]).name == "a.mp3"
+    assert rec["organize_status"] == "moved"  # 当前文件已做完
+    assert rec["cover_status"] == "skipped"  # do_cover=False
 
 
 def test_pipeline_stop_during_organize(tmp_path):
-    """归类中停止：已搬的留下，未搬的标 stopped 留在源目录。"""
+    """归类中停止：已搬的留下，没轮到的不进报告、留在源目录。"""
     import threading
     src = tmp_path / "src"
     src.mkdir()
@@ -250,7 +252,84 @@ def test_pipeline_stop_during_organize(tmp_path):
     by_name = {Path(r["path"]).name: r for r in result["records"]}
     assert result["stopped"] is True
     assert by_name["a.mp3"]["organize_status"] == "moved"
-    assert by_name["b.mp3"]["organize_status"] == "stopped"
+    assert "b.mp3" not in by_name
     assert (lib / "待分类" / "周杰伦 - 夜曲.mp3").exists()
     assert not (src / "a.mp3").exists()
     assert (src / "b.mp3").exists()
+
+
+def test_pipeline_processes_one_file_fully_before_next(tmp_path):
+    """逐文件处理：一个文件走完所有步骤，才开始下一个文件。"""
+    src = tmp_path / "src"
+    src.mkdir()
+    _make_clean_mp3(src / "a.mp3", "夜曲", "周杰伦")
+    _make_clean_mp3(src / "b.mp3", "红豆", "王菲")
+    seq = []
+
+    def _progress(i, total, phase, message):
+        name = Path(message).name if phase in (
+            "tags", "integrity", "organize", "cover") and message else ""
+        seq.append((phase, name))
+
+    run_pipeline(src, tmp_path / "lib", do_cover=False,
+                 mp3val_exe=None, ffmpeg_exe=None, progress=_progress)
+    idx_a_org = next(i for i, (ph, n) in enumerate(seq)
+                     if ph == "organize" and n == "a.mp3")
+    idx_b_tags = next(i for i, (ph, n) in enumerate(seq)
+                      if ph == "tags" and n == "b.mp3")
+    assert idx_a_org < idx_b_tags  # a 的归类先于 b 的标签
+
+
+def test_pipeline_prebatch_verify_single_batch(tmp_path, monkeypatch):
+    """大模型校对预批量：3 个文件只发一次请求（而不是逐文件 3 次）。"""
+    from mp3organizer.llm_tagger import LLMConfig
+    src = tmp_path / "src"
+    src.mkdir()
+    for name, title, artist in (("a.mp3", "夜曲", "周杰伦"),
+                                ("b.mp3", "红豆", "王菲"),
+                                ("c.mp3", "Hello", "Adele")):
+        _make_clean_mp3(src / name, title, artist)
+    calls = []
+
+    def fake_verify(items, config, *, cache_dir=None, request_fn=None):
+        calls.append([it["filename"] for it in items])
+        return [{"title": it["title"], "artist": it["artist"], "album": "",
+                 "genre": "", "year": "", "track": "",
+                 "confidence": 0.9, "note": ""} for it in items]
+
+    monkeypatch.setattr("mp3organizer.llm_tagger.verify_tags", fake_verify)
+    cfg = LLMConfig(base_url="https://fake.local", api_key="k", model="m")
+    result = run_pipeline(src, tmp_path / "lib", llm_config=cfg,
+                          llm_verify=True, do_check=False, do_cover=False,
+                          mp3val_exe=None, ffmpeg_exe=None)
+    assert len(calls) == 1  # 预批量一次
+    assert sorted(calls[0]) == ["a.mp3", "b.mp3", "c.mp3"]
+    assert all(r["tag_status"] in ("verified", "unchanged")
+               for r in result["records"])
+
+
+def test_pipeline_removes_empty_source_subdirs(tmp_path):
+    """文件搬走后，源文件夹里变空的子目录被删除（源根目录保留）。"""
+    src = tmp_path / "src"
+    (src / "sub").mkdir(parents=True)
+    _make_clean_mp3(src / "sub" / "a.mp3", "夜曲", "周杰伦")
+    _make_clean_mp3(src / "sub" / "b.mp3", "红豆", "王菲")
+    _make_clean_mp3(src / "top.mp3", "Hello", "Adele")
+    lib = tmp_path / "lib"
+    run_pipeline(src, lib, do_tags=False, do_check=False, do_cover=False,
+                 mp3val_exe=None, ffmpeg_exe=None)
+    assert not (src / "sub").exists()  # 空了，被删
+    assert src.exists()  # 根目录保留
+    assert not (src / "top.mp3").exists()  # 搬走了
+
+
+def test_pipeline_dry_run_keeps_empty_dirs(tmp_path):
+    """试运行不搬文件：空目录逻辑不触发，源目录原样保留。"""
+    src = tmp_path / "src"
+    (src / "sub").mkdir(parents=True)
+    _make_clean_mp3(src / "sub" / "a.mp3", "夜曲", "周杰伦")
+    run_pipeline(src, tmp_path / "lib", do_tags=False, do_check=False,
+                 do_cover=False, dry_run=True,
+                 mp3val_exe=None, ffmpeg_exe=None)
+    assert (src / "sub" / "a.mp3").exists()
+    assert (src / "sub").exists()

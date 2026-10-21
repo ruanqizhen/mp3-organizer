@@ -45,6 +45,7 @@ REM 先试运行，看报告，确认没问题再真正执行
 python -m mp3organizer fix-tags D:\老音乐 --dry-run --report report.html
 
 REM 完整流水线：修复编码 → 检查隔离 → 归类 → 找封面
+REM （逐文件处理：一个文件走完所有步骤，再处理下一个；文件搬走后源目录下变空的子目录会被删除）
 python -m mp3organizer all D:\老音乐 D:\音乐库 ^
     --backup-dir D:\备份 --quarantine-dir D:\待处理 ^
     --report report.html --report-csv report.csv
@@ -94,6 +95,31 @@ python -m mp3organizer fix-tags D:\老音乐 --guess-from-filename --llm
 图形界面里也有对应的设置区，填一次会自动记住（`~/.config/mp3-organizer/llm.json`）。
 规则能猜出的文件名不会调大模型；调过的文件名会本地缓存，不重复花钱；
 大模型猜出的项在报告里标"大模型猜测·置信度"，失败会自动回退到正则。
+
+## 大模型优先校对标签（可选）
+
+上面的 `--llm` 是"正则猜不出才问大模型"。如果标签本身又脏又乱
+（比如标题里塞了演唱者、专辑、年份、"Ft. 某某"），可以用 `--llm-verify`
+让大模型**优先**校对：把文件名 + 现有标签一起发给大模型验证，
+生成规范的标题 / 演唱者 / 专辑 / 类型 / 年份 / 音轨号：
+
+```bat
+python -m mp3organizer fix-tags D:\老音乐 --llm --llm-verify --dry-run --report 报告.html
+```
+
+校对要点（prompt 里写明，大模型按此执行）：
+
+- 演唱者统一用最广为人知的中文名：`Jay Chou`→`周杰伦`、`Namewee`→`黃明志`，
+  "周杰伦 Jay Chou" 视为同一人，不会再分成两个演唱者；
+- 标题里混入的信息会被拆出来：`【】`内的歌名/专辑、`Ft./feat.` 后面的合作艺人
+  （并入演唱者）、4 位年份、专辑名。例如
+  `Namewee 黃明志【胡志明的雨】Ft. 越南小天王胡光孝 亞洲通吃 2017 All Eat Asia`
+  会校对为标题 `胡志明的雨`、演唱者 `黃明志、胡光孝`、专辑 `亞洲通吃`、年份 `2017`；
+- 大模型没把握的字段留空、不编造；校对过的项在报告里标"大模型校对·置信度"。
+
+为省请求，校对在处理前批量一次查完（结果本地缓存，`llm_verify.json`）；
+失败的单项会自动回退到正则/原值，不中断流程。图形界面里在"大模型"设置区
+勾选"优先用大模型校对标签"即可。
 
 ## 整理杂乱文件名（rename）
 

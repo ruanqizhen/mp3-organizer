@@ -1,0 +1,172 @@
+"""大模型优先校对标签测试：verify_tags 批量/缓存、fix_file 接入、pipeline 预批量与逐文件。"""
+import json
+from pathlib import Path
+
+import pytest
+from mutagen.id3 import ID3, TIT2, TPE1, Encoding
+
+from mp3organizer.llm_tagger import (
+    LLMConfig, verify_tags, VERIFY_SYSTEM_PROMPT, _query_cached,
+)
+from mp3organizer.encoding import fix_file
+
+CFG = LLMConfig(base_url="https://fake.local", api_key="k", model="m", batch_size=2)
+
+FRAME = (b"\xff\xfb\x90\x00" + b"\x00" * 100)
+
+
+def _fake_post(response_text):
+    """构造 request_fn 注入：返回固定 JSON 文本，记录调用次数。"""
+    calls = []
+
+    def fake_post(url, headers, payload, timeout):
+        calls.append(payload)
+        return {"choices": [{"message": {"content": response_text}}]}
+
+    return fake_post, calls
+
+
+def _item(filename, title="", artist=""):
+    return {"filename": filename, "title": title, "artist": artist,
+            "album": "", "genre": "", "year": "", "track": ""}
+
+
+def _fake_verify_factory(results_by_filename=None, calls=None):
+    def fake_verify(items, config, *, cache_dir=None, request_fn=None):
+        if calls is not None:
+            calls.append([it["filename"] for it in items])
+        out = []
+        for it in items:
+            if results_by_filename and it["filename"] in results_by_filename:
+                out.append(results_by_filename[it["filename"]])
+            else:  # 默认原样返回
+                out.append({"title": it["title"], "artist": it["artist"],
+                            "album": "", "genre": "", "year": "", "track": "",
+                            "confidence": 0.9, "note": ""})
+        return out
+    return fake_verify
+
+
+def _make_tagged_mp3(path: Path, title: str, artist: str) -> None:
+    tag = ID3()
+    tag.add(TIT2(encoding=Encoding.UTF8, text=[title]))
+    tag.add(TPE1(encoding=Encoding.UTF8, text=[artist]))
+    tag.save(str(path))
+    with open(path, "ab") as f:
+        f.write(FRAME * 5)
+
+
+# ---------- verify_tags ----------
+
+def test_verify_tags_sends_filename_and_tags(tmp_path):
+    items = [_item("a.mp3", "夜曲", "Jay Chou"),
+             _item("b.mp3", "红豆", "王菲")]
+    want = [{"title": "夜曲", "artist": "周杰伦", "confidence": 0.99},
+            {"title": "红豆", "artist": "王菲", "confidence": 0.99}]
+    fake_post, calls = _fake_post(json.dumps(want, ensure_ascii=False))
+    got = verify_tags(items, CFG, cache_dir=tmp_path, request_fn=fake_post)
+    assert got == want
+    # 批量：batch_size=2，2 个 item 一次发完
+    assert len(calls) == 1
+    sent = json.loads(calls[0]["messages"][1]["content"])
+    sent0 = json.loads(sent[0])  # 每个 key 本身是 JSON 字符串
+    assert sent0["filename"] == "a.mp3"
+    assert "Jay Chou" in sent0["artist"]
+    # 缓存：第二次不再请求
+    got2 = verify_tags(items, CFG, cache_dir=tmp_path, request_fn=fake_post)
+    assert got2 == want
+    assert len(calls) == 1
+
+
+def test_verify_prompt_covers_key_points():
+    assert "filename" in VERIFY_SYSTEM_PROMPT
+    assert "Jay Chou" in VERIFY_SYSTEM_PROMPT
+    assert "周杰伦" in VERIFY_SYSTEM_PROMPT
+
+
+# ---------- fix_file 接入 ----------
+
+def test_fix_file_llm_verify_cleans_messy_title(tmp_path, monkeypatch):
+    messy = "Namewee 黃明志【胡志明的雨】Ft. 越南小天王胡光孝 亞洲通吃 2017 All Eat Asia"
+    p = tmp_path / (messy + ".mp3")
+    _make_tagged_mp3(p, messy, "Namewee")
+    verified = {"title": "胡志明的雨", "artist": "黃明志、胡光孝",
+                "album": "亞洲通吃", "genre": "流行", "year": "2017",
+                "track": "", "confidence": 0.9, "note": "拆分标题"}
+    calls = []
+    monkeypatch.setattr("mp3organizer.llm_tagger.verify_tags",
+                        _fake_verify_factory({p.name: verified}, calls))
+    r = fix_file(p, llm_verify=True, llm_config=CFG)
+    assert r["status"] == "verified"
+    audio = ID3(str(p))
+    assert audio["TIT2"].text[0] == "胡志明的雨"
+    assert audio["TPE1"].text[0] == "黃明志、胡光孝"
+    assert audio["TALB"].text[0] == "亞洲通吃"
+    assert str(audio["TDRC"].text[0]) == "2017"  # TDRC 读出是 ID3TimeStamp
+    assert any(c.get("verified") for c in r["changes"])
+    assert len(calls) == 1  # 单文件只查一次
+
+
+def test_fix_file_llm_verify_unifies_artist_name(tmp_path, monkeypatch):
+    p = tmp_path / "song.mp3"
+    _make_tagged_mp3(p, "夜曲", "Jay Chou")
+    verified = {"title": "夜曲", "artist": "周杰伦", "album": "十一月的萧邦",
+                "genre": "流行", "year": "2005", "track": "",
+                "confidence": 0.99, "note": "统一艺人名"}
+    monkeypatch.setattr("mp3organizer.llm_tagger.verify_tags",
+                        _fake_verify_factory({p.name: verified}, None))
+    r = fix_file(p, llm_verify=True, llm_config=CFG)
+    assert ID3(str(p))["TPE1"].text[0] == "周杰伦"
+    assert r["status"] == "verified"
+
+
+def test_fix_file_llm_verify_keeps_existing_when_llm_empty(tmp_path, monkeypatch):
+    p = tmp_path / "song.mp3"
+    _make_tagged_mp3(p, "红豆", "王菲")
+    # 大模型没给出 artist：保留已有的，不洗掉
+    verified = {"title": "红豆", "artist": "", "album": "",
+                "genre": "", "year": "", "track": "",
+                "confidence": 0.9, "note": ""}
+    monkeypatch.setattr("mp3organizer.llm_tagger.verify_tags",
+                        _fake_verify_factory({p.name: verified}, None))
+    fix_file(p, llm_verify=True, llm_config=CFG)
+    audio = ID3(str(p))
+    assert audio["TPE1"].text[0] == "王菲"
+    assert audio["TIT2"].text[0] == "红豆"
+
+
+def test_fix_file_llm_verify_no_tag_builds_from_filename(tmp_path, monkeypatch):
+    p = tmp_path / "周杰伦 - 夜曲.mp3"
+    with open(p, "wb") as f:
+        f.write(FRAME * 5)  # 无任何标签
+    verified = {"title": "夜曲", "artist": "周杰伦", "album": "十一月的萧邦",
+                "genre": "流行", "year": "2005", "track": "",
+                "confidence": 0.95, "note": ""}
+    monkeypatch.setattr("mp3organizer.llm_tagger.verify_tags",
+                        _fake_verify_factory({p.name: verified}, None))
+    r = fix_file(p, llm_verify=True, llm_config=CFG)
+    assert r["status"] == "verified"
+    audio = ID3(str(p))
+    assert audio["TIT2"].text[0] == "夜曲"
+    assert audio["TPE1"].text[0] == "周杰伦"
+
+
+def test_fix_file_llm_verify_failure_falls_back(tmp_path, monkeypatch):
+    p = tmp_path / "song.mp3"
+    _make_tagged_mp3(p, "", "")  # 空标题/演唱者
+
+    def boom(items, config, *, cache_dir=None, request_fn=None):
+        raise RuntimeError("net down")
+
+    monkeypatch.setattr("mp3organizer.llm_tagger.verify_tags", boom)
+    r = fix_file(p, llm_verify=True, llm_config=CFG,
+                 guess_from_filename=True)
+    assert "llm_error" in r or r["status"] in ("unchanged", "no_tag", "fixed")
+
+
+def test_fix_file_llm_verify_skipped_without_config(tmp_path):
+    p = tmp_path / "song.mp3"
+    _make_tagged_mp3(p, "夜曲", "周杰伦")
+    r = fix_file(p, llm_verify=True, llm_config=None)
+    assert r["status"] == "unchanged"
+    assert r["changes"] == []

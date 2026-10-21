@@ -263,3 +263,42 @@ def classify_artists(
             cache[keys[i]] = item
         _save_cache(cache_dir, "llm_classify.json", cache)
     return [cache.get(k, {}) for k in keys]
+
+
+VERIFY_SYSTEM_PROMPT = """你是中文音乐标签校对助手。用户会给你一批 MP3 文件的信息（JSON 数组），每项包含 filename（文件名，含后缀）、title、artist、album、genre、year、track（当前标签值，可能为空、互相矛盾，或把多种信息挤在一个字段里）。
+
+任务：综合文件名和现有标签，为每首歌生成正确的标签。
+
+要求：
+1. 只返回 JSON 数组，与输入顺序一一对应，不要输出其他任何内容。
+2. 每项包含字段：title（纯歌名，不含演唱者/专辑/Feat/年份等杂质）、artist（演唱者标准名，多人用"、"连接）、album（专辑，未知填空字符串）、genre（流派，如 流行/摇滚/民谣/古典/爵士/电子/说唱/乡村/轻音乐，未知填空字符串）、year（4 位年份，未知填空字符串）、track（音轨号，未知填空字符串）、confidence（0~1）、note（中文，一句话说明你改了什么；没改填空字符串）。
+3. 演唱者统一用最广为人知的中文名：Jay Chou→周杰伦，Namewee→黃明志，JJ Lin→林俊杰；中英文混写时以中文名为准；"周杰伦 Jay Chou"这类视为同一人。
+4. 标题里常混入的信息要拆出来：【】内的歌名/专辑名、Ft./feat./Featuring/合唱后面的是合作艺人（并入 artist）、4 位年份、专辑名、"亚洲通吃"这类版本/企划名归入 album。
+5. 不要编造：实在判断不出，title 用去掉噪音后的文件名，artist/album/genre/year/track 填空字符串，confidence 不超过 0.3。
+6. 拼音缩写、错别字、语序颠倒尽力还原（如 "yq_zjl"→夜曲/周杰伦）。
+
+示例：
+输入：[{"filename": "Namewee 黃明志【胡志明的雨】Ft. 越南小天王胡光孝 亞洲通吃 2017 All Eat Asia.mp3", "title": "Namewee 黃明志【胡志明的雨】Ft. 越南小天王胡光孝 亞洲通吃 2017 All Eat Asia", "artist": "Namewee", "album": "", "genre": "", "year": "", "track": ""}]
+输出：[{"title": "胡志明的雨", "artist": "黃明志、胡光孝", "album": "亞洲通吃", "genre": "流行", "year": "2017", "track": "", "confidence": 0.9, "note": "标题拆出歌名/合作艺人/专辑/年份；Namewee 统一为黃明志"}]
+"""
+
+
+def verify_tags(
+    items: list[dict],
+    config: LLMConfig,
+    *,
+    cache_dir: str | Path | None = None,
+    request_fn=None,
+) -> list[dict]:
+    """大模型优先校对标签：文件名 + 现有标签 → 规范的 title/artist/album/genre/year/track。
+
+    items 每项含 filename/title/artist/album/genre/year/track。
+    批量查询、按整项内容缓存（llm_verify.json），返回与 items 一一对应的结果。
+    失败时抛 LLMError；调用前请确认 config.is_configured()。
+    """
+    keys = [json.dumps(
+        {k: (it.get(k) or "") for k in
+         ("filename", "title", "artist", "album", "genre", "year", "track")},
+        ensure_ascii=False, sort_keys=True) for it in items]
+    return _query_cached(keys, config, VERIFY_SYSTEM_PROMPT, "llm_verify.json",
+                         cache_dir=cache_dir, request_fn=request_fn)

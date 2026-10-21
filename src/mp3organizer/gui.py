@@ -56,6 +56,70 @@ class App(tk.Tk):
         self._src_root: str | None = None
         self._stop_event = None
         self._build_widgets()
+        self._load_gui_state()  # 恢复上次的用户选择
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    @staticmethod
+    def _gui_state_file() -> Path:
+        return Path.home() / ".config" / "mp3-organizer" / "gui.json"
+
+    def _save_gui_state(self) -> None:
+        """把用户选择（目录/勾选/模板/阈值等）存到本地，下次启动恢复。"""
+        import json
+        data = {
+            "entries": {k: e.get() for k, e in self._entries.items()},
+            "vars": {k: v.get() for k, v in self._vars.items()},
+            "min_score": self._min_score.get(),
+            "encodings": self._encodings.get(),
+            "template": self._template.get(),
+            "subdir_threshold": self._subdir_threshold.get(),
+        }
+        try:
+            p = self._gui_state_file()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(data, ensure_ascii=False, indent=1),
+                         encoding="utf-8")
+        except OSError:
+            pass  # 状态存不下不影响主流程
+
+    def _load_gui_state(self) -> None:
+        """启动时恢复上次的用户选择；文件缺失或损坏时用默认值。"""
+        try:
+            import json
+            data = json.loads(self._gui_state_file().read_text(
+                encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(data, dict):
+            return
+        for k, v in (data.get("entries") or {}).items():
+            ent = self._entries.get(k)
+            if ent is not None and isinstance(v, str) and v:
+                ent.delete(0, "end")
+                ent.insert(0, v)
+        for k, v in (data.get("vars") or {}).items():
+            var = self._vars.get(k)
+            if var is not None and isinstance(v, bool):
+                var.set(v)
+        for attr, key, ok in (
+                ("_min_score", "min_score", None),
+                ("_encodings", "encodings", None),
+                ("_template", "template",
+                 (TEMPLATE_PERSONAL, TEMPLATE_CLASSIC)),
+                ("_subdir_threshold", "subdir_threshold", None)):
+            v = data.get(key)
+            if not isinstance(v, str) or not v:
+                continue
+            if ok is not None and v not in ok:
+                continue
+            getattr(self, attr).set(v)
+
+    def _on_close(self) -> None:
+        """关窗口前先存用户选择（即使没点过开始）。"""
+        try:
+            self._save_gui_state()
+        finally:
+            self.destroy()
 
     def _build_widgets(self) -> None:
         pad = {"padx": 8, "pady": 4}
@@ -142,6 +206,9 @@ class App(tk.Tk):
         self._llm_enabled = tk.BooleanVar(value=False)
         ttk.Checkbutton(frm, text="启用：文件名用规则猜不出时，调用大模型",
                         variable=self._llm_enabled).pack(anchor="w", padx=8, pady=2)
+        self._llm_verify = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text="优先用大模型校对标签（含文件名验证，生成规范标签）",
+                        variable=self._llm_verify).pack(anchor="w", padx=8, pady=2)
         self._llm_fields: dict[str, tk.StringVar] = {}
         for key, label, default in (
                 ("base_url", "API 地址", "https://api.deepseek.com"),
@@ -173,10 +240,12 @@ class App(tk.Tk):
             if data.get(key):
                 var.set(data[key])
         self._llm_enabled.set(bool(data.get("enabled")))
+        self._llm_verify.set(bool(data.get("verify")))
 
     def _save_llm_settings(self) -> None:
         import json
-        data = {"enabled": self._llm_enabled.get()}
+        data = {"enabled": self._llm_enabled.get(),
+                "verify": self._llm_verify.get()}
         data.update({k: v.get().strip() for k, v in self._llm_fields.items()})
         p = self._llm_config_file()
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -243,7 +312,12 @@ class App(tk.Tk):
         if llm_err:
             messagebox.showerror("错误", llm_err)
             return
+        if self._llm_verify.get() and llm_config is None:
+            messagebox.showerror("错误", "启用“优先用大模型校对标签”前，"
+                                 "请先勾选“启用”并配好大模型")
+            return
         self._save_llm_settings()
+        self._save_gui_state()
 
         self._src_root = root
         self._stop_event = threading.Event()
@@ -259,6 +333,8 @@ class App(tk.Tk):
             self._log_line("【试运行模式】不会修改任何文件，只生成报告")
         if llm_config is not None:
             self._log_line("大模型猜标签已启用（%s）" % llm_config.model)
+            if self._llm_verify.get():
+                self._log_line("大模型优先校对标签已启用（含文件名验证）")
         if self._vars["do_organize"].get():
             self._log_line("归类模板：%s" % (
                 "我的方式（语言.性别/演唱者）"
@@ -275,6 +351,7 @@ class App(tk.Tk):
             encodings=encodings,
             guess_from_filename=self._vars["guess"].get(),
             llm_config=llm_config,
+            llm_verify=self._llm_verify.get(),
             merge_mode=self._vars["merge_mode"].get(),
             stop_event=self._stop_event,
             template=self._template.get(),
