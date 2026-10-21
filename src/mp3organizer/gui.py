@@ -239,8 +239,12 @@ class App(tk.Tk):
         for key, var in self._llm_fields.items():
             if data.get(key):
                 var.set(data[key])
-        self._llm_enabled.set(bool(data.get("enabled")))
-        self._llm_verify.set(bool(data.get("verify")))
+        # 只在文件里有这个键时才覆盖：老版本存的 llm.json 没有 "verify" 键，
+        # 不能让缺失的键把新默认值（True）抹成 False；用户明确存过的 False 照旧
+        if "enabled" in data:
+            self._llm_enabled.set(bool(data["enabled"]))
+        if "verify" in data:
+            self._llm_verify.set(bool(data["verify"]))
 
     def _save_llm_settings(self) -> None:
         import json
