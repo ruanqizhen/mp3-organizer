@@ -84,6 +84,7 @@ def _prebatch_verify(
     llm_config,
     llm_cache_dir: str | Path | None,
     progress=None,
+    stats: dict | None = None,
 ) -> tuple[dict[str, dict], dict[str, dict], str]:
     """预批量大模型标签校对。
 
@@ -106,7 +107,7 @@ def _prebatch_verify(
             k: (info.get(k) or "") for k in _VERIFY_FIELDS[1:]}})
     try:
         results = verify_tags(items, llm_config, cache_dir=llm_cache_dir,
-                              progress=progress)
+                              progress=progress, stats=stats)
         error = ""
     except Exception as exc:  # noqa: BLE001 - 整批失败就整体回退
         results = [{} for _ in items]
@@ -133,6 +134,7 @@ def _prebatch_classify(
     llm_config,
     llm_cache_dir: str | Path | None,
     progress=None,
+    stats: dict | None = None,
 ) -> str:
     """预批量归类分类：把需要问大模型的演唱者一次性查完，写进缓存。
 
@@ -161,7 +163,7 @@ def _prebatch_classify(
         return ""
     try:
         classify_artists(need, llm_config, cache_dir=llm_cache_dir,
-                         progress=progress)
+                         progress=progress, stats=stats)
         return ""
     except Exception as exc:  # noqa: BLE001 - 失败则主循环逐文件重试
         return "%s: %s" % (type(exc).__name__, exc)
@@ -241,12 +243,17 @@ def run_pipeline(
     if do_tags and verify_enabled:
         def _vp(done: int, total_b: int, label: str) -> None:
             _p(done, total_b, "llm_verify", label)
+        vstats: dict = {}
         verify_map, final_infos, err = _prebatch_verify(
             files, repaired_infos,
             llm_config=llm_config, llm_cache_dir=cache_opt,
-            progress=_vp)
+            progress=_vp, stats=vstats)
         if err:
             _p(0, total, "llm_verify", f"批量校对失败，已回退：{err}")
+        elif vstats:
+            _p(0, total, "llm_verify",
+               f"共 {vstats['total']} 首，缓存命中 {vstats['cached']} 首，"
+               f"实际调用 {vstats['queried']} 首")
 
     learned: dict[str, str] = {}
     if do_organize and template == TEMPLATE_PERSONAL and library is not None:
@@ -256,12 +263,17 @@ def run_pipeline(
     if do_organize and template == TEMPLATE_PERSONAL and _llm_ready(llm_config):
         def _cp(done: int, total_b: int, label: str) -> None:
             _p(done, total_b, "llm_classify", label)
+        cstats: dict = {}
         err = _prebatch_classify(files, final_infos, learned,
                                  llm_config=llm_config,
                                  llm_cache_dir=cache_opt,
-                                 progress=_cp)
+                                 progress=_cp, stats=cstats)
         if err:
             _p(0, total, "llm_classify", f"批量分类失败，主循环逐文件重试：{err}")
+        elif cstats and cstats["queried"]:
+            _p(0, total, "llm_classify",
+               f"共 {cstats['total']} 位，缓存命中 {cstats['cached']} 位，"
+               f"实际调用 {cstats['queried']} 位")
 
     # 个人模板：预先统计每演唱者文件数（用校对/修复后的演唱者名）；
     # 达到阈值才建演唱者子目录
