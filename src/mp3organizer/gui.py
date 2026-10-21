@@ -142,6 +142,9 @@ class App(tk.Tk):
         self._llm_enabled = tk.BooleanVar(value=False)
         ttk.Checkbutton(frm, text="启用：文件名用规则猜不出时，调用大模型",
                         variable=self._llm_enabled).pack(anchor="w", padx=8, pady=2)
+        self._llm_verify = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text="优先用大模型校对标签（含文件名验证，生成规范标签）",
+                        variable=self._llm_verify).pack(anchor="w", padx=8, pady=2)
         self._llm_fields: dict[str, tk.StringVar] = {}
         for key, label, default in (
                 ("base_url", "API 地址", "https://api.deepseek.com"),
@@ -173,10 +176,12 @@ class App(tk.Tk):
             if data.get(key):
                 var.set(data[key])
         self._llm_enabled.set(bool(data.get("enabled")))
+        self._llm_verify.set(bool(data.get("verify")))
 
     def _save_llm_settings(self) -> None:
         import json
-        data = {"enabled": self._llm_enabled.get()}
+        data = {"enabled": self._llm_enabled.get(),
+                "verify": self._llm_verify.get()}
         data.update({k: v.get().strip() for k, v in self._llm_fields.items()})
         p = self._llm_config_file()
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -243,6 +248,10 @@ class App(tk.Tk):
         if llm_err:
             messagebox.showerror("错误", llm_err)
             return
+        if self._llm_verify.get() and llm_config is None:
+            messagebox.showerror("错误", "启用“优先用大模型校对标签”前，"
+                                 "请先勾选“启用”并配好大模型")
+            return
         self._save_llm_settings()
 
         self._src_root = root
@@ -259,6 +268,8 @@ class App(tk.Tk):
             self._log_line("【试运行模式】不会修改任何文件，只生成报告")
         if llm_config is not None:
             self._log_line("大模型猜标签已启用（%s）" % llm_config.model)
+            if self._llm_verify.get():
+                self._log_line("大模型优先校对标签已启用（含文件名验证）")
         if self._vars["do_organize"].get():
             self._log_line("归类模板：%s" % (
                 "我的方式（语言.性别/演唱者）"
@@ -275,6 +286,7 @@ class App(tk.Tk):
             encodings=encodings,
             guess_from_filename=self._vars["guess"].get(),
             llm_config=llm_config,
+            llm_verify=self._llm_verify.get(),
             merge_mode=self._vars["merge_mode"].get(),
             stop_event=self._stop_event,
             template=self._template.get(),

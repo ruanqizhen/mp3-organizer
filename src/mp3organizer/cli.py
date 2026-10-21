@@ -38,6 +38,9 @@ def _ensure_safe_console_output() -> None:
 def _add_llm_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--llm", action="store_true",
                    help="启用大模型（猜标签、定归类分类时兜底）")
+    p.add_argument("--llm-verify", action="store_true",
+                   help="大模型优先校对标签：把文件名+现有标签发给大模型验证，"
+                        "生成规范的标题/演唱者/专辑/类型/年份（需先启用 --llm）")
     p.add_argument("--llm-base-url", default=None,
                    help="大模型 API 地址（OpenAI 兼容），默认取环境变量 MP3ORGANIZER_LLM_BASE_URL，否则为 DeepSeek")
     p.add_argument("--llm-api-key", default=None,
@@ -48,7 +51,7 @@ def _add_llm_args(p: argparse.ArgumentParser) -> None:
 
 def _llm_config_from_args(args: argparse.Namespace):
     """根据命令行参数构建 LLMConfig；未启用 --llm 时返回 None。"""
-    if not getattr(args, "llm", False):
+    if not (getattr(args, "llm", False) or getattr(args, "llm_verify", False)):
         return None
     from .llm_tagger import LLMConfig
     cfg = LLMConfig(
@@ -108,8 +111,9 @@ def cmd_fix_tags(args: argparse.Namespace) -> int:
                      backup_root=args.root, encodings=encodings,
                      force_encoding=args.force_encoding,
                      guess_from_filename=args.guess_from_filename,
-                     llm_config=llm_config)
-        n_fixed += r["status"] in ("fixed", "guessed")
+                     llm_config=llm_config,
+                     llm_verify=getattr(args, "llm_verify", False))
+        n_fixed += r["status"] in ("fixed", "verified", "guessed")
         records.append({"path": r["path"], "tag_status": r["status"],
                         "tag_changes": r["changes"], "integrity_status": "",
                         "cover_status": "", "new_path": ""})
@@ -117,6 +121,14 @@ def cmd_fix_tags(args: argparse.Namespace) -> int:
             print(f"[修复] {p}")
             for c in r["changes"]:
                 print(f"    {c['frame']}: {c['old']} → {c['new']} ({c['encoding']})")
+        elif r["status"] == "verified":
+            print(f"[校对] {p}")
+            for c in r["changes"]:
+                if c.get("verified"):
+                    print(f"    {c['frame']}: {c['old']} → {c['new']}"
+                          f" (大模型置信度 {c.get('confidence')})")
+                else:
+                    print(f"    {c['frame']}: {c['old']} → {c['new']} ({c['encoding']})")
         elif r["status"] == "guessed":
             print(f"[猜测] {p}")
             for c in r["changes"]:
@@ -218,6 +230,7 @@ def cmd_all(args: argparse.Namespace) -> int:
         encodings=encodings, force_encoding=args.force_encoding,
         guess_from_filename=args.guess_from_filename,
         llm_config=_llm_config_from_args(args),
+        llm_verify=getattr(args, "llm_verify", False),
         template=args.template, subdir_threshold=args.subdir_threshold,
         fix_streams=not args.no_fix, mp3val_exe=args.mp3val, ffmpeg_exe=args.ffmpeg,
         min_score=args.min_score, report_html=args.report, report_csv=args.report_csv,
@@ -298,6 +311,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
         encodings=encodings, force_encoding=args.force_encoding,
         guess_from_filename=args.guess_from_filename,
         llm_config=_llm_config_from_args(args),
+        llm_verify=getattr(args, "llm_verify", False),
         template=args.template, subdir_threshold=args.subdir_threshold,
         merge_mode=True, on_duplicate=args.on_duplicate,
         fix_streams=not args.no_fix, mp3val_exe=args.mp3val, ffmpeg_exe=args.ffmpeg,
