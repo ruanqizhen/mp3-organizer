@@ -292,7 +292,7 @@ def test_pipeline_prebatch_verify_single_batch(tmp_path, monkeypatch):
     calls = []
 
     def fake_verify(items, config, *, cache_dir=None, request_fn=None,
-                    progress=None):
+                    progress=None, stats=None):
         calls.append([it["filename"] for it in items])
         return [{"title": it["title"], "artist": it["artist"], "album": "",
                  "genre": "", "year": "", "track": "",
@@ -347,7 +347,7 @@ def test_pipeline_llm_prebatch_reports_progress(tmp_path, monkeypatch):
         _make_clean_mp3(src / name, title, artist)
 
     def fake_verify(items, config, *, cache_dir=None, request_fn=None,
-                    progress=None):
+                    progress=None, stats=None):
         # 模拟真实 verify_tags：逐批调 progress
         bs = 2
         for i in range(0, len(items), bs):

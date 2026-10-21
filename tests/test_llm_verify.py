@@ -33,7 +33,7 @@ def _item(filename, title="", artist=""):
 
 def _fake_verify_factory(results_by_filename=None, calls=None):
     def fake_verify(items, config, *, cache_dir=None, request_fn=None,
-                    progress=None):
+                    progress=None, stats=None):
         if calls is not None:
             calls.append([it["filename"] for it in items])
         out = []
@@ -218,3 +218,24 @@ def test_classify_artists_progress_shows_artist(tmp_path):
     classify_artists(pairs, cfg, cache_dir=tmp_path, request_fn=fake_post,
                      progress=lambda d, t, label: seen.append((d, t, label)))
     assert seen == [(0, 3, "周杰伦"), (2, 3, "Adele")]
+
+
+def test_query_cached_stats_reports_cache_hits(tmp_path):
+    """stats 报出总数/缓存命中/实际调用数。"""
+    from mp3organizer.llm_tagger import _query_cached, SYSTEM_PROMPT
+    items = [{"title": "t%d" % i, "artist": "a", "album": "",
+              "genre": "", "year": "", "confidence": 0.9} for i in range(5)]
+    fake_post, calls = _fake_post(json.dumps(items))
+    cfg = LLMConfig(base_url="https://fake.local", api_key="k", model="m",
+                    batch_size=10)
+    names = ["f%d" % i for i in range(5)]
+    st1: dict = {}
+    _query_cached(names, cfg, SYSTEM_PROMPT, "s.json", cache_dir=tmp_path,
+                  request_fn=fake_post, stats=st1)
+    assert st1 == {"total": 5, "cached": 0, "queried": 5}
+    # 第二次全命中缓存，不再请求
+    st2: dict = {}
+    _query_cached(names, cfg, SYSTEM_PROMPT, "s.json", cache_dir=tmp_path,
+                  request_fn=fake_post, stats=st2)
+    assert st2 == {"total": 5, "cached": 5, "queried": 0}
+    assert len(calls) == 1
