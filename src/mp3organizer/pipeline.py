@@ -95,11 +95,14 @@ def _prebatch_verify(
     progress(done, total, label)：每批请求前回调，label 为本批第一首歌。
     """
     from .llm_tagger import verify_tags
+    from .encoding import fix_text
 
     items: list[dict] = []
     for p in files:
         info = repaired_infos[str(p)]
-        items.append({"filename": p.name, **{
+        # 文件名本身可能乱码，先修再送大模型
+        display_name, _ = fix_text(p.name)
+        items.append({"filename": display_name, **{
             k: (info.get(k) or "") for k in _VERIFY_FIELDS[1:]}})
     try:
         results = verify_tags(items, llm_config, cache_dir=llm_cache_dir,

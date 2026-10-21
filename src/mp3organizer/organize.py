@@ -86,6 +86,7 @@ _FILENAME_NOISE_KEYWORDS = (
     "中英", "english", "字幕", "高清", "hd", "免费", "免費",
     "下载", "下載", "www.", ".com", ".net", "320k", "flac",
     "无损", "無損", "动态", "動態",
+    "主題曲", "主题曲", "片头曲", "片頭曲", "片尾曲", "插曲",
 )
 
 _BRACKET_PAIRS = (("【", "】"), ("[", "]"), ("(", ")"),
@@ -96,8 +97,31 @@ _BRACKET_PAIRS = (("【", "】"), ("[", "]"), ("(", ")"),
 _LYRIC_QUOTE_PAIRS = (("『", "』"), ("「", "」"))
 _LYRIC_PUNCT = ("，", "。", "！", "？", "；", "：")
 
+
+def _clean_book_brackets(text: str) -> str:
+    """处理《》书名号：含噪音词整段删；中英混写只留中文并去掉括号；
+    纯中文保留内容去括号（香蜜沉沉燼如霜这类归属由大模型定）。"""
+    def _repl(m: re.Match) -> str:
+        inner = m.group(0)[1:-1]
+        if any(k in inner.lower() for k in _FILENAME_NOISE_KEYWORDS):
+            return ""
+        has_cjk = re.search(r"[\u4e00-\u9fff]", inner)
+        has_latin = re.search(r"[a-zA-Z]", inner)
+        if has_cjk and has_latin:
+            cjk_only = re.sub(r"[a-zA-Z0-9]+", "", inner).strip()
+            return cjk_only or inner
+        return inner
+    return re.sub(r"《[^《》]*》", _repl, text)
+
 _STANDALONE_NOISE_RE = re.compile(
-    r"with\s+english|lyric\s+video|中英字幕|动态歌词|動態歌詞", re.IGNORECASE)
+    r"with\s+english|lyric\s+video|中英字幕|动态歌词|動態歌詞"
+    r"|官方\s*mv|\bost\b",
+    re.IGNORECASE)
+
+# 开头站点前缀（www.snowice.net- / xiami.com_），下载站标记，去掉
+_SITE_PREFIX_RE = re.compile(
+    r"^(?:www\.)?[\w-]+\.(?:com|net|org|cn|com\.cn|io|tv|fm)\s*[-_]\s*",
+    re.IGNORECASE)
 
 
 def _strip_lyric_quotes(text: str) -> str:
@@ -137,18 +161,20 @@ def clean_display_name(text: str, *, is_artist: bool = False) -> str:
 
     去掉噪音括号段（如【动态歌词 lyric video】）、『』「」里的歌词引用、
     独立噪音词（with English、中英字幕等）、末尾孤立的"中英"；
-    统一分隔符（" _ "、" / " → "、"；演唱者栏里无空格的下划线也视为
-    多人分隔，如 王宇宙Leto_喬浚丞 → 王宇宙Leto、喬浚丞）；压缩多余空白。
+    统一分隔符（" _ "、" / " → ", "；演唱者栏里无空格的下划线也视为
+    多人分隔，如 王宇宙Leto_喬浚丞 → 王宇宙Leto, 喬浚丞）；压缩多余空白。
     注意：只做机械清理。语义级拆分（中英重复、标题混入演唱者、
     频道名、备选标题等）靠大模型校对（--llm-verify），这里不动。
     """
     text = _strip_lyric_quotes(text or "")
+    text = _clean_book_brackets(text)
     text = _strip_noise_brackets(text)
+    text = _SITE_PREFIX_RE.sub("", text)
     text = _STANDALONE_NOISE_RE.sub("", text)
     text = re.sub(r"中英$", "", text)  # 末尾孤立的中英标记，如 "...with English 中英"
-    text = text.replace(" _ ", "、").replace(" / ", "、")
+    text = text.replace(" _ ", ", ").replace(" / ", ", ")
     if is_artist:
-        text = re.sub(r"(?<=[^\W_])_(?=[^\W_])", "、", text)
+        text = re.sub(r"(?<=[^\W_])_(?=[^\W_])", ", ", text)
     text = re.sub(r"\s+", " ", text).strip(" -_")
     return text
 
