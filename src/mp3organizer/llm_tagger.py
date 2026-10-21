@@ -26,7 +26,10 @@ class LLMConfig:
     base_url: str = "https://api.deepseek.com"
     api_key: str = ""
     model: str = "deepseek-chat"
-    batch_size: int = 20
+    # 每批歌曲数：verify 类重 prompt 下 10 最合适——输出约 3000 tokens，
+    # 留在 max_tokens=4000 内不被截断；输入约 5000 tokens，8K 上下文模型也从容；
+    # 整批失败时只浪费 10 个（失败无部分重试）。
+    batch_size: int = 10
     timeout: int = 60
 
     @classmethod
