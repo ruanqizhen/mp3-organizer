@@ -280,6 +280,10 @@ VERIFY_SYSTEM_PROMPT = """你是中文音乐标签校对助手。用户会给你
 示例：
 输入：[{"filename": "Namewee 黃明志【胡志明的雨】Ft. 越南小天王胡光孝 亞洲通吃 2017 All Eat Asia.mp3", "title": "Namewee 黃明志【胡志明的雨】Ft. 越南小天王胡光孝 亞洲通吃 2017 All Eat Asia", "artist": "Namewee", "album": "", "genre": "", "year": "", "track": ""}]
 输出：[{"title": "胡志明的雨", "artist": "黃明志、胡光孝", "album": "亞洲通吃", "genre": "流行", "year": "2017", "track": "", "confidence": 0.9, "note": "标题拆出歌名/合作艺人/专辑/年份；Namewee 统一为黃明志"}]
+
+示例 2（标题把演唱者/歌名/噪音全塞在一起，演唱者栏为空）：
+输入：[{"filename": "PLAY MUSIC - 篇章 Pages - 张韶涵 _ 王赫野 Angela Chang _ Wang HeYe【动态歌词 lyric video】with English 中英.mp3", "title": "PLAY MUSIC - 篇章 Pages - 张韶涵 _ 王赫野 Angela Chang _ Wang HeYe【动态歌词 lyric video】with English 中英", "artist": "", "album": "", "genre": "", "year": "", "track": ""}]
+输出：[{"title": "篇章", "artist": "张韶涵、王赫野", "album": "", "genre": "流行", "year": "", "track": "", "confidence": 0.85, "note": "标题含演唱者/歌名/噪音：拆出歌名篇章与演唱者；中英重复保留中文；去掉 PLAY MUSIC 前缀与歌词视频噪音"}]
 """
 
 
