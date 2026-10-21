@@ -56,6 +56,70 @@ class App(tk.Tk):
         self._src_root: str | None = None
         self._stop_event = None
         self._build_widgets()
+        self._load_gui_state()  # 恢复上次的用户选择
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    @staticmethod
+    def _gui_state_file() -> Path:
+        return Path.home() / ".config" / "mp3-organizer" / "gui.json"
+
+    def _save_gui_state(self) -> None:
+        """把用户选择（目录/勾选/模板/阈值等）存到本地，下次启动恢复。"""
+        import json
+        data = {
+            "entries": {k: e.get() for k, e in self._entries.items()},
+            "vars": {k: v.get() for k, v in self._vars.items()},
+            "min_score": self._min_score.get(),
+            "encodings": self._encodings.get(),
+            "template": self._template.get(),
+            "subdir_threshold": self._subdir_threshold.get(),
+        }
+        try:
+            p = self._gui_state_file()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(data, ensure_ascii=False, indent=1),
+                         encoding="utf-8")
+        except OSError:
+            pass  # 状态存不下不影响主流程
+
+    def _load_gui_state(self) -> None:
+        """启动时恢复上次的用户选择；文件缺失或损坏时用默认值。"""
+        try:
+            import json
+            data = json.loads(self._gui_state_file().read_text(
+                encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(data, dict):
+            return
+        for k, v in (data.get("entries") or {}).items():
+            ent = self._entries.get(k)
+            if ent is not None and isinstance(v, str) and v:
+                ent.delete(0, "end")
+                ent.insert(0, v)
+        for k, v in (data.get("vars") or {}).items():
+            var = self._vars.get(k)
+            if var is not None and isinstance(v, bool):
+                var.set(v)
+        for attr, key, ok in (
+                ("_min_score", "min_score", None),
+                ("_encodings", "encodings", None),
+                ("_template", "template",
+                 (TEMPLATE_PERSONAL, TEMPLATE_CLASSIC)),
+                ("_subdir_threshold", "subdir_threshold", None)):
+            v = data.get(key)
+            if not isinstance(v, str) or not v:
+                continue
+            if ok is not None and v not in ok:
+                continue
+            getattr(self, attr).set(v)
+
+    def _on_close(self) -> None:
+        """关窗口前先存用户选择（即使没点过开始）。"""
+        try:
+            self._save_gui_state()
+        finally:
+            self.destroy()
 
     def _build_widgets(self) -> None:
         pad = {"padx": 8, "pady": 4}
@@ -253,6 +317,7 @@ class App(tk.Tk):
                                  "请先勾选“启用”并配好大模型")
             return
         self._save_llm_settings()
+        self._save_gui_state()
 
         self._src_root = root
         self._stop_event = threading.Event()

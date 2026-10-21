@@ -61,3 +61,75 @@ def test_app_builds_widgets():
         assert app._current is not None
     finally:
         app.destroy()
+
+
+def _make_app(monkeypatch, tmp_path):
+    """有显示器时构造 App；HOME 指到 tmp_path，无显示器时跳过。"""
+    import tkinter as tk
+    import pytest
+    from pathlib import Path
+    from mp3organizer import gui as gui_mod
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    # gui 模块里 from pathlib import Path，绑的是同一个类，打补丁生效
+    assert gui_mod.Path is Path
+    try:
+        return gui_mod.App()
+    except tk.TclError:
+        pytest.skip("无显示器")
+
+
+def test_gui_state_save_and_load_roundtrip(monkeypatch, tmp_path):
+    app = _make_app(monkeypatch, tmp_path)
+    try:
+        app._entries["root"].delete(0, "end")
+        app._entries["root"].insert(0, "D:/music")
+        app._entries["library"].delete(0, "end")
+        app._entries["library"].insert(0, "D:/lib")
+        app._vars["dry_run"].set(False)
+        app._vars["do_cover"].set(False)
+        app._template.set("classic")
+        app._subdir_threshold.set("5")
+        app._save_gui_state()
+    finally:
+        app.destroy()
+
+    app2 = _make_app(monkeypatch, tmp_path)
+    try:
+        assert app2._entries["root"].get() == "D:/music"
+        assert app2._entries["library"].get() == "D:/lib"
+        assert app2._entries["backup"].get() == ""
+        assert app2._vars["dry_run"].get() is False
+        assert app2._vars["do_cover"].get() is False
+        assert app2._vars["do_tags"].get() is True  # 默认值保留
+        assert app2._template.get() == "classic"
+        assert app2._subdir_threshold.get() == "5"
+        assert app2._min_score.get() == "0.75"
+    finally:
+        app2.destroy()
+
+
+def test_gui_state_corrupt_file_ignored(monkeypatch, tmp_path):
+    p = tmp_path / ".config" / "mp3-organizer" / "gui.json"
+    p.parent.mkdir(parents=True)
+    p.write_text("{不是 json", encoding="utf-8")
+    app = _make_app(monkeypatch, tmp_path)
+    try:
+        assert app._entries["root"].get() == ""
+        assert app._vars["dry_run"].get() is True
+        assert app._template.get() == "personal"
+    finally:
+        app.destroy()
+
+
+def test_gui_state_invalid_template_falls_back(monkeypatch, tmp_path):
+    import json
+    p = tmp_path / ".config" / "mp3-organizer" / "gui.json"
+    p.parent.mkdir(parents=True)
+    p.write_text(json.dumps({"template": "bogus", "vars": {"dry_run": "yes"}}),
+                 encoding="utf-8")
+    app = _make_app(monkeypatch, tmp_path)
+    try:
+        assert app._template.get() == "personal"  # 非法值不用
+        assert app._vars["dry_run"].get() is True  # 非 bool 不用
+    finally:
+        app.destroy()
