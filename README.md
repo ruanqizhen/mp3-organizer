@@ -12,8 +12,13 @@ Windows 老 MP3 批量整理工具。很多年前存的 MP3，标签乱码、文
 ## 安装
 
 ```bat
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
+pip install -e .
 ```
+
+之后每次新开终端，先执行 `.venv\Scripts\activate`，再运行 `mp3tool ...` 或 `mp3tool-gui`。
 
 需要完整性检查的话，另行下载 [mp3val](https://sourceforge.net/projects/mp3val/) 和
 [ffmpeg](https://ffmpeg.org/download.html) 的 Windows 版，放到 PATH 里或用 `--mp3val` / `--ffmpeg` 指定路径。
@@ -22,9 +27,11 @@ pip install -r requirements.txt
 ## 图形界面（GUI）
 
 ```bat
-python -m mp3organizer gui
-REM 或安装后直接运行： mp3tool-gui
+.venv\Scripts\activate
+mp3tool-gui
 ```
+
+可编辑安装后 `mp3tool` / `mp3tool-gui` 直接可用，无需设置 PYTHONPATH（注意：CMD 的 `set` 语法在 PowerShell 里不生效，不要用来设环境变量）。
 
 界面里选好源文件夹和音乐库，勾选要做的步骤，点"开始处理"。
 默认是**试运行模式**（只生成报告不改文件），确认报告没问题后，
