@@ -156,19 +156,27 @@ def _query_cached(
     *,
     cache_dir: str | Path | None = None,
     request_fn=None,
+    progress=None,
+    label_fn=None,
 ) -> list[dict]:
     """批量查询，带本地缓存。返回与 filenames 一一对应的结果 dict 列表。
 
     request_fn(url, headers, payload, timeout) -> 响应 JSON（dict），供测试注入。
+    progress(done, total, label)：每批请求前回调一次，label 为本批第一项的
+    显示名（label_fn(key) 算出；不传则直接用 key）。
     失败时抛 LLMError；调用前请确认 config.is_configured()。
     """
     if not config.is_configured():
         raise LLMError("大模型未配置：需要 API 地址和模型名")
     cache = _load_cache(cache_dir, cache_name)
     todo = [f for f in filenames if f not in cache]
+    total = len(todo)
     bs = max(1, config.batch_size)
     for i in range(0, len(todo), bs):
         batch = todo[i:i + bs]
+        if progress is not None:
+            key0 = batch[0]
+            progress(i, total, label_fn(key0) if label_fn else key0)
         results = _query_batch(batch, config, system_prompt, request_fn)
         for name, item in zip(batch, results):
             cache[name] = item
@@ -182,10 +190,15 @@ def query_llm(
     *,
     cache_dir: str | Path | None = None,
     request_fn=None,
+    progress=None,
 ) -> list[dict]:
-    """猜标签：文件名 → 标题/演唱者/专辑/类型/年份/置信度。"""
+    """猜标签：文件名 → 标题/演唱者/专辑/类型/年份/置信度。
+
+    progress(done, total, label)：每批请求前回调，label 为本批第一个文件名。
+    """
     return _query_cached(filenames, config, SYSTEM_PROMPT, "llm_tags.json",
-                         cache_dir=cache_dir, request_fn=request_fn)
+                         cache_dir=cache_dir, request_fn=request_fn,
+                         progress=progress)
 
 
 RENAME_SYSTEM_PROMPT = """你是文件名整理助手。用户会给你一批 MP3 文件名（JSON 数组），每个都很长很乱，夹杂着各种无关信息。
@@ -209,10 +222,15 @@ def parse_filenames(
     *,
     cache_dir: str | Path | None = None,
     request_fn=None,
+    progress=None,
 ) -> list[dict]:
-    """解析杂乱文件名 → [{artist, title, confidence}]，用于整理标准文件名。"""
+    """解析杂乱文件名 → [{artist, title, confidence}]，用于整理标准文件名。
+
+    progress(done, total, label)：每批请求前回调，label 为本批第一个文件名。
+    """
     return _query_cached(filenames, config, RENAME_SYSTEM_PROMPT, "llm_rename.json",
-                         cache_dir=cache_dir, request_fn=request_fn)
+                         cache_dir=cache_dir, request_fn=request_fn,
+                         progress=progress)
 
 
 CLASSIFY_SYSTEM_PROMPT = """你是中文音乐收藏整理助手。用户会给你一批演唱者（JSON 数组，每项 {"artist": 演唱者, "title": 代表作}），请判断每位演唱者属于哪个分类。
@@ -243,8 +261,12 @@ def classify_artists(
     *,
     cache_dir: str | Path | None = None,
     request_fn=None,
+    progress=None,
 ) -> list[dict]:
-    """演唱者 → 语言.性别分类。pairs 为 [(artist, title)]，按演唱者缓存。"""
+    """演唱者 → 语言.性别分类。pairs 为 [(artist, title)]，按演唱者缓存。
+
+    progress(done, total, label)：每批请求前回调，label 为本批第一位演唱者。
+    """
     if not config.is_configured():
         raise LLMError("大模型未配置：需要 API 地址和模型名")
     keys = [normalize_artist(a) or ("title:" + t.strip().casefold())
@@ -256,9 +278,13 @@ def classify_artists(
         if k not in seen:  # 同一批里同一演唱者只问一次
             seen.add(k)
             todo.append(i)
+    total = len(todo)
     bs = max(1, config.batch_size)
     for s in range(0, len(todo), bs):
         batch_idx = todo[s:s + bs]
+        if progress is not None:
+            a0, t0 = pairs[batch_idx[0]]
+            progress(s, total, a0 or t0)
         batch = [{"artist": pairs[i][0], "title": pairs[i][1]}
                  for i in batch_idx]
         results = _query_batch(batch, config, CLASSIFY_SYSTEM_PROMPT, request_fn)
@@ -296,16 +322,21 @@ def verify_tags(
     *,
     cache_dir: str | Path | None = None,
     request_fn=None,
+    progress=None,
 ) -> list[dict]:
     """大模型优先校对标签：文件名 + 现有标签 → 规范的 title/artist/album/genre/year/track。
 
     items 每项含 filename/title/artist/album/genre/year/track。
     批量查询、按整项内容缓存（llm_verify.json），返回与 items 一一对应的结果。
+    progress(done, total, label)：每批请求前回调，label 为本批第一首歌的文件名。
     失败时抛 LLMError；调用前请确认 config.is_configured()。
     """
     keys = [json.dumps(
         {k: (it.get(k) or "") for k in
          ("filename", "title", "artist", "album", "genre", "year", "track")},
         ensure_ascii=False, sort_keys=True) for it in items]
+    name_of = {k: (it.get("filename") or "") for k, it in zip(keys, items)}
     return _query_cached(keys, config, VERIFY_SYSTEM_PROMPT, "llm_verify.json",
-                         cache_dir=cache_dir, request_fn=request_fn)
+                         cache_dir=cache_dir, request_fn=request_fn,
+                         progress=progress,
+                         label_fn=lambda k: name_of.get(k) or k)
