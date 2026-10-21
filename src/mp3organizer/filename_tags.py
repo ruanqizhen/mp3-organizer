@@ -31,8 +31,17 @@ _TRACK_RE = re.compile(r"^\s*(?:[\[\(])?(\d{1,3})(?:[\]\)])?\s*[.\-_ \t]+\s*")
 _BRACKET_LEAD_RE = re.compile(r"^\s*[\[\(]\s*(.+?)\s*[\]\)]\s*")
 
 
+# 开头站点前缀（如 www.snowice.net- / xiami.com_），下载站标记，整体去掉
+_SITE_PREFIX_RE = re.compile(
+    r"^\s*(?:www\.)?[\w-]+\.(?:com|net|org|cn|com\.cn|io|tv|fm)"
+    r"\s*[-_]\s*",
+    re.IGNORECASE,
+)
+
+
 def _clean_stem(stem: str) -> str:
     stem = _JUNK_RE.sub("", stem)
+    stem = _SITE_PREFIX_RE.sub("", stem)
     return re.sub(r"\s+", " ", stem).strip()
 
 
@@ -79,6 +88,13 @@ def guess_from_filename(path: str | Path) -> dict:
         result["artist"], result["title"] = parts
     elif len(parts) == 1:
         result["title"] = parts[0]
+
+    # 标题里残留的音轨号（如 "01.放开"）也拆出来
+    if result["title"]:
+        m = _TRACK_RE.match(result["title"])
+        if m and not result["track"]:
+            result["track"] = m.group(1).lstrip("0") or "0"
+            result["title"] = result["title"][m.end():].strip()
 
     for key in ("title", "artist", "album"):
         if result[key]:

@@ -206,7 +206,7 @@ RENAME_SYSTEM_PROMPT = """你是文件名整理助手。用户会给你一批 MP
 
 要求：
 1. 只返回 JSON 数组，与输入顺序一一对应，不要输出其他任何内容。
-2. 每项包含字段：artist（演唱者/演奏者，未知填空字符串）、title（曲名）、confidence（0~1，你对这次解析的把握）。
+2. 每项包含字段：artist（演唱者/演奏者，多人用", "连接，如"张学友, 汤宝如"，未知填空字符串）、title（曲名）、confidence（0~1，你对这次解析的把握）。
 3. 发挥你的中文流行音乐知识：拼音缩写、错别字、顺序颠倒都要尽力还原。
 4. 实在看不出的文件名：title 填去掉噪音后最像曲名的部分，artist 填空字符串，confidence 填 0.1，不要编造演唱者。
 
@@ -300,24 +300,33 @@ VERIFY_SYSTEM_PROMPT = """你是中文音乐标签校对助手。用户会给你
 
 要求：
 1. 只返回 JSON 数组，与输入顺序一一对应，不要输出其他任何内容。
-2. 每项包含字段：title（纯歌名，不含演唱者/专辑/Feat/年份等杂质）、artist（演唱者标准名，多人用"、"连接）、album（专辑，未知填空字符串）、genre（流派，如 流行/摇滚/民谣/古典/爵士/电子/说唱/乡村/轻音乐，未知填空字符串）、year（4 位年份，未知填空字符串）、track（音轨号，未知填空字符串）、confidence（0~1）、note（中文，一句话说明你改了什么；没改填空字符串）。
-3. 演唱者统一用最广为人知的中文名：Jay Chou→周杰伦，Namewee→黃明志，JJ Lin→林俊杰；中英文混写时以中文名为准；"周杰伦 Jay Chou"这类视为同一人；下划线连接的多个名字拆成多人（王宇宙Leto_喬浚丞→王宇宙Leto、喬浚丞）。
+2. 每项包含字段：title（纯歌名，不含演唱者/专辑/Feat/年份等杂质）、artist（演唱者标准名，多人用", "连接，如"张学友, 汤宝如"）、album（专辑，未知填空字符串）、genre（流派，如 流行/摇滚/民谣/古典/爵士/电子/说唱/乡村/轻音乐，未知填空字符串）、year（4 位年份，未知填空字符串）、track（音轨号，未知填空字符串）、confidence（0~1）、note（中文，一句话说明你改了什么；没改填空字符串）。
+3. 演唱者统一用最广为人知的中文名：Jay Chou→周杰伦，Namewee→黃明志，JJ Lin→林俊杰；中英文混写时以中文名为准；"周杰伦 Jay Chou"这类视为同一人；下划线连接的多个名字拆成多人（王宇宙Leto_喬浚丞→"王宇宙Leto, 喬浚丞"）。
 4. 标题里常混入的信息要拆出来：【】内的歌名/专辑名、Ft./feat./Featuring/合唱后面的是合作艺人（并入 artist）、4 位年份、专辑名、"亚洲通吃"这类版本/企划名归入 album；括号里是副标题/备选名时取主标题（"若月亮沒來 (若是月亮還沒來)"取"若月亮沒來"）。
-5. 去掉噪音：PLAY MUSIC 这类来源前缀、【动态歌词/lyric video】这类标记、with English/中英字幕这类标记、『』「」里的歌词引用；演唱者栏是频道名/上传者名（如 XXX Music Channel）时视为噪音，从标题里找真正演唱者。
-6. 拼音缩写、错别字、语序颠倒尽力还原（如 "yq_zjl"→夜曲/周杰伦）。
-7. 不要编造：实在判断不出，title 用去掉噪音后的文件名，artist/album/genre/year/track 填空字符串，confidence 不超过 0.3。
+5. 去掉噪音：PLAY MUSIC 这类来源前缀、www.xxx.com 这类站点前缀、【动态歌词/lyric video】这类标记、with English/中英字幕这类标记、『』「」里的歌词引用、官方MV/OST 标记；演唱者栏是频道名/上传者名（如 XXX Music Channel、YOYOROCK 滾石移動）时视为噪音，从标题里找真正演唱者。
+6. 《》书名号里中英混写时取中文（《不染 Unsullied》取"不染"）；【香蜜沉沉燼如霜主題曲】这类主题曲信息可归入 album。
+7. 拼音缩写、错别字、语序颠倒尽力还原（如 "yq_zjl"→夜曲/周杰伦）。
+8. 不要编造：实在判断不出，title 用去掉噪音后的文件名，artist/album/genre/year/track 填空字符串，confidence 不超过 0.3。
 
 示例：
 输入：[{"filename": "Namewee 黃明志【胡志明的雨】Ft. 越南小天王胡光孝 亞洲通吃 2017 All Eat Asia.mp3", "title": "Namewee 黃明志【胡志明的雨】Ft. 越南小天王胡光孝 亞洲通吃 2017 All Eat Asia", "artist": "Namewee", "album": "", "genre": "", "year": "", "track": ""}]
-输出：[{"title": "胡志明的雨", "artist": "黃明志、胡光孝", "album": "亞洲通吃", "genre": "流行", "year": "2017", "track": "", "confidence": 0.9, "note": "标题拆出歌名/合作艺人/专辑/年份；Namewee 统一为黃明志"}]
+输出：[{"title": "胡志明的雨", "artist": "黃明志, 胡光孝", "album": "亞洲通吃", "genre": "流行", "year": "2017", "track": "", "confidence": 0.9, "note": "标题拆出歌名/合作艺人/专辑/年份；Namewee 统一为黃明志"}]
 
 示例 2（标题把演唱者/歌名/噪音全塞在一起，演唱者栏为空）：
 输入：[{"filename": "PLAY MUSIC - 篇章 Pages - 张韶涵 _ 王赫野 Angela Chang _ Wang HeYe【动态歌词 lyric video】with English 中英.mp3", "title": "PLAY MUSIC - 篇章 Pages - 张韶涵 _ 王赫野 Angela Chang _ Wang HeYe【动态歌词 lyric video】with English 中英", "artist": "", "album": "", "genre": "", "year": "", "track": ""}]
-输出：[{"title": "篇章", "artist": "张韶涵、王赫野", "album": "", "genre": "流行", "year": "", "track": "", "confidence": 0.85, "note": "标题含演唱者/歌名/噪音：拆出歌名篇章与演唱者；中英重复保留中文；去掉 PLAY MUSIC 前缀与歌词视频噪音"}]
+输出：[{"title": "篇章", "artist": "张韶涵, 王赫野", "album": "", "genre": "流行", "year": "", "track": "", "confidence": 0.85, "note": "标题含演唱者/歌名/噪音：拆出歌名篇章与演唱者；中英重复保留中文；去掉 PLAY MUSIC 前缀与歌词视频噪音"}]
 
 示例 3（演唱者栏是频道名，标题塞了备选标题/演唱者/歌词引用）：
 输入：[{"filename": "SKY Music Channel - 若月亮沒來 (若是月亮還沒來) - 王宇宙Leto_喬浚丞『若是晨風還沒來，晚風也可吹入懷』【動態歌詞】.mp3", "title": "若月亮沒來 (若是月亮還沒來) - 王宇宙Leto_喬浚丞『若是晨風還沒來，晚風也可吹入懷』【動態歌詞】", "artist": "SKY Music Channel", "album": "", "genre": "", "year": "", "track": ""}]
-输出：[{"title": "若月亮沒來", "artist": "王宇宙Leto、喬浚丞", "album": "", "genre": "流行", "year": "", "track": "", "confidence": 0.8, "note": "演唱者栏是频道名视为噪音，从标题找出真正演唱者；下划线拆成两人；括号备选标题取主标题；去掉歌词引用与动态歌词噪音"}]
+输出：[{"title": "若月亮沒來", "artist": "王宇宙Leto, 喬浚丞", "album": "", "genre": "流行", "year": "", "track": "", "confidence": 0.8, "note": "演唱者栏是频道名视为噪音，从标题找出真正演唱者；下划线拆成两人；括号备选标题取主标题；去掉歌词引用与动态歌词噪音"}]
+
+示例 4（频道前缀 + 中英艺人 + 书名号标题 + 主题曲/OST 噪音）：
+输入：[{"filename": "YOYOROCK 滾石移動 - 毛不易 Mao Buyi《不染 Unsullied》【香蜜沉沉燼如霜主題曲】官方MV Ashes of Love OST.mp3", "title": "", "artist": "", "album": "", "genre": "", "year": "", "track": ""}]
+输出：[{"title": "不染", "artist": "毛不易", "album": "香蜜沉沉燼如霜", "genre": "流行", "year": "", "track": "", "confidence": 0.85, "note": "去掉频道前缀；中英重复保留中文；书名号取中文歌名；主题曲信息归入专辑；去掉官方MV/OST噪音"}]
+
+示例 5（站点前缀 + 音轨号；文件名乱码已在送模型前修好）：
+输入：[{"filename": "www.snowice.net-爱乐团 - 01.放开.mp3", "title": "", "artist": "", "album": "", "genre": "", "year": "", "track": ""}]
+输出：[{"title": "放开", "artist": "爱乐团", "album": "", "genre": "流行", "year": "", "track": "1", "confidence": 0.85, "note": "站点前缀是噪音；01. 是音轨号"}]
 """
 
 

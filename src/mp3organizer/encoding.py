@@ -199,7 +199,10 @@ def _build_tag_from_filename(
 
     llm_verify=True 且大模型可用时：优先用大模型校对（文件名+空标签），
     拿不到可用结果才回退到正则→大模型两档。
+    文件名本身也可能乱码（如 GBK 被误读），先修再送大模型/正则。
     """
+    # 文件名乱码先修，否则大模型看到的是 °®ÀÖÍÅ 这类垃圾
+    display_name, _ = fix_text(path.name)
     if llm_verify and llm_config is not None and llm_config.is_configured():
         verified = llm_verify_result
         if verified is None:
@@ -207,7 +210,7 @@ def _build_tag_from_filename(
                 from .llm_tagger import verify_tags
                 fn = _verify_fn or verify_tags
                 verified = fn(
-                    [{"filename": path.name, "title": "", "artist": "",
+                    [{"filename": display_name, "title": "", "artist": "",
                       "album": "", "genre": "", "year": "", "track": ""}],
                     llm_config, cache_dir=llm_cache_dir)[0]
             except Exception as exc:  # noqa: BLE001 - 失败就回退正则

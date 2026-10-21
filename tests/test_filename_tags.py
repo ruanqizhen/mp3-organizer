@@ -108,3 +108,12 @@ def test_guess_tags_no_llm_configured():
     from mp3organizer.filename_tags import guess_tags
     guess, source, err = guess_tags("/m/yq_zjl.mp3")
     assert (source, err) == ("regex", "")  # 未启用大模型时沿用旧规则
+
+
+def test_guess_from_filename_site_prefix_and_mojibake():
+    """站点前缀去掉，文件名乱码修好，标题里音轨号拆出来。"""
+    from mp3organizer.filename_tags import guess_from_filename
+    got = guess_from_filename("www.snowice.net-°®ÀÖÍÅ - 01.放开.mp3")
+    assert got["artist"] == "爱乐团", got
+    assert got["title"] == "放开", got
+    assert got["track"] == "1", got

@@ -240,8 +240,8 @@ def test_clean_display_name_keeps_real_bracket_title():
 def test_clean_display_name_standalone_noise_and_separators():
     from mp3organizer.organize import clean_display_name
     assert clean_display_name("篇章 with English 中英") == "篇章"
-    assert clean_display_name("张韶涵 _ 王赫野") == "张韶涵、王赫野"
-    assert clean_display_name("A / B") == "A、B"
+    assert clean_display_name("张韶涵 _ 王赫野") == "张韶涵, 王赫野"
+    assert clean_display_name("A / B") == "A, B"
 
 
 def test_clean_display_name_user_case():
@@ -252,7 +252,7 @@ def test_clean_display_name_user_case():
     got = clean_display_name(messy)
     assert "动态歌词" not in got and "lyric video" not in got.lower()
     assert "with English" not in got and not got.endswith("中英")
-    assert "、" in got  # 分隔符统一
+    assert ", " in got  # 分隔符统一为逗号
     assert "篇章" in got
 
 
@@ -262,12 +262,12 @@ def test_target_path_personal_cleans_filename():
             "title": "篇章【动态歌词 lyric video】with English 中英",
             "artist": "张韶涵 _ 王赫野"}
     p = target_path_personal("/lib", info, "华语.双人", False)
-    assert p.name == "张韶涵、王赫野 - 篇章.mp3"
+    assert p.name == "张韶涵, 王赫野 - 篇章.mp3"
 
 
 def test_guess_by_rules_duet_with_ideographic_comma():
     from mp3organizer.categories import guess_by_rules
-    assert guess_by_rules("张韶涵、王赫野", "篇章") == "华语.双人"
+    assert guess_by_rules("张韶涵, 王赫野", "篇章") == "华语.双人"
 
 
 def test_clean_display_name_strips_lyric_quote():
@@ -278,7 +278,7 @@ def test_clean_display_name_strips_lyric_quote():
 
 def test_clean_display_name_artist_underscore():
     from mp3organizer.organize import clean_display_name
-    assert clean_display_name("王宇宙Leto_喬浚丞", is_artist=True) == "王宇宙Leto、喬浚丞"
+    assert clean_display_name("王宇宙Leto_喬浚丞", is_artist=True) == "王宇宙Leto, 喬浚丞"
     # 标题不碰无空格下划线
     assert clean_display_name("王宇宙Leto_喬浚丞") == "王宇宙Leto_喬浚丞"
 
@@ -307,3 +307,30 @@ def test_llm_verify_enabled_defaults():
     assert _llm_verify_enabled(ns) is True  # 单独 --llm-verify 也开
     ns = argparse.Namespace(llm=False, llm_verify=False, no_llm_verify=False)
     assert _llm_verify_enabled(ns) is False
+
+
+def test_clean_display_name_site_prefix():
+    from mp3organizer.organize import clean_display_name
+    assert clean_display_name("www.snowice.net-爱乐团") == "爱乐团"
+    assert clean_display_name("xiami.com_周杰伦 - 夜曲") == "周杰伦 - 夜曲"
+
+
+def test_clean_display_name_book_brackets():
+    from mp3organizer.organize import clean_display_name
+    assert clean_display_name("《不染 Unsullied》") == "不染"  # 中英混写取中文
+    assert clean_display_name("《香蜜沉沉燼如霜》") == "香蜜沉沉燼如霜"  # 纯中文去括号保留
+
+
+def test_clean_display_name_mv_ost_noise():
+    from mp3organizer.organize import clean_display_name
+    got = clean_display_name("不染官方MV Ashes of Love OST")
+    assert "官方MV" not in got and "OST" not in got
+    assert "不染" in got
+    assert clean_display_name("不染【香蜜沉沉燼如霜主題曲】") == "不染"
+
+
+def test_clean_display_name_comma_separator():
+    """用户要求：多人演唱者用逗号分隔。"""
+    from mp3organizer.organize import clean_display_name
+    assert clean_display_name("张学友 _ 汤宝如", is_artist=True) == "张学友, 汤宝如"
+    assert clean_display_name("张学友/汤宝如", is_artist=True) == "张学友/汤宝如"  # 无空格斜杠不动
