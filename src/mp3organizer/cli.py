@@ -37,16 +37,25 @@ def _ensure_safe_console_output() -> None:
 
 def _add_llm_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--llm", action="store_true",
-                   help="启用大模型（猜标签、定归类分类时兜底）")
+                   help="启用大模型（猜标签、定归类分类时兜底；默认同时开启标签校对）")
     p.add_argument("--llm-verify", action="store_true",
                    help="大模型优先校对标签：把文件名+现有标签发给大模型验证，"
-                        "生成规范的标题/演唱者/专辑/类型/年份（需先启用 --llm）")
+                        "生成规范的标题/演唱者/专辑/类型/年份（已是 --llm 的默认行为，此开关显式启用）")
+    p.add_argument("--no-llm-verify", action="store_true",
+                   help="关闭大模型标签校对，只用大模型猜标签/定分类")
     p.add_argument("--llm-base-url", default=None,
                    help="大模型 API 地址（OpenAI 兼容），默认取环境变量 MP3ORGANIZER_LLM_BASE_URL，否则为 DeepSeek")
     p.add_argument("--llm-api-key", default=None,
                    help="API Key（建议用环境变量 MP3ORGANIZER_LLM_API_KEY，避免留在命令行历史里；本地模型可不填）")
     p.add_argument("--llm-model", default=None,
                    help="模型名，默认取环境变量 MP3ORGANIZER_LLM_MODEL，否则为 deepseek-chat")
+
+
+def _llm_verify_enabled(args: argparse.Namespace) -> bool:
+    """大模型标签校对是否开启：--llm 即默认开；--no-llm-verify 可关。"""
+    if getattr(args, "no_llm_verify", False):
+        return False
+    return bool(getattr(args, "llm", False) or getattr(args, "llm_verify", False))
 
 
 def _llm_config_from_args(args: argparse.Namespace):
@@ -112,7 +121,7 @@ def cmd_fix_tags(args: argparse.Namespace) -> int:
                      force_encoding=args.force_encoding,
                      guess_from_filename=args.guess_from_filename,
                      llm_config=llm_config,
-                     llm_verify=getattr(args, "llm_verify", False))
+                     llm_verify=_llm_verify_enabled(args))
         n_fixed += r["status"] in ("fixed", "verified", "guessed")
         records.append({"path": r["path"], "tag_status": r["status"],
                         "tag_changes": r["changes"], "integrity_status": "",
@@ -233,7 +242,7 @@ def cmd_all(args: argparse.Namespace) -> int:
         encodings=encodings, force_encoding=args.force_encoding,
         guess_from_filename=args.guess_from_filename,
         llm_config=_llm_config_from_args(args),
-        llm_verify=getattr(args, "llm_verify", False),
+        llm_verify=_llm_verify_enabled(args),
         template=args.template, subdir_threshold=args.subdir_threshold,
         fix_streams=not args.no_fix, mp3val_exe=args.mp3val, ffmpeg_exe=args.ffmpeg,
         min_score=args.min_score, report_html=args.report, report_csv=args.report_csv,
@@ -317,7 +326,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
         encodings=encodings, force_encoding=args.force_encoding,
         guess_from_filename=args.guess_from_filename,
         llm_config=_llm_config_from_args(args),
-        llm_verify=getattr(args, "llm_verify", False),
+        llm_verify=_llm_verify_enabled(args),
         template=args.template, subdir_threshold=args.subdir_threshold,
         merge_mode=True, on_duplicate=args.on_duplicate,
         fix_streams=not args.no_fix, mp3val_exe=args.mp3val, ffmpeg_exe=args.ffmpeg,
