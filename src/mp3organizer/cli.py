@@ -218,6 +218,9 @@ def cmd_all(args: argparse.Namespace) -> int:
     encodings = tuple(args.encodings.split(",")) if args.encodings else CANDIDATE_ENCODINGS
 
     def _progress(i: int, total: int, phase: str, message: str) -> None:
+        if phase in ("llm_verify", "llm_classify"):
+            print(f"  [大模型 {i}/{total}] {message}")
+            return
         if phase in ("tags", "integrity", "organize", "cover"):
             return  # 每个文件只在完成时打印一行
         if phase == "done":
@@ -299,6 +302,9 @@ def cmd_merge(args: argparse.Namespace) -> int:
     encodings = tuple(args.encodings.split(",")) if args.encodings else CANDIDATE_ENCODINGS
 
     def _progress(i: int, total: int, phase: str, message: str) -> None:
+        if phase in ("llm_verify", "llm_classify"):
+            print(f"  [大模型 {i}/{total}] {message}")
+            return
         if phase in ("tags", "integrity", "organize", "cover"):
             return
         if phase == "done":

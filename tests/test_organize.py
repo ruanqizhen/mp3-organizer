@@ -222,3 +222,49 @@ def test_merge_file_personal_moves_new(tmp_path):
                    category="华语.女", use_subdir=False)
     assert r["status"] == "moved"
     assert Path(r["dest"]) == lib / "华语.女" / "王菲 - 红豆.mp3"
+
+
+def test_clean_display_name_strips_noise_brackets():
+    from mp3organizer.organize import clean_display_name
+    assert clean_display_name("夜曲【动态歌词 lyric video】") == "夜曲"
+    assert clean_display_name("红豆[Official MV]") == "红豆"
+    assert clean_display_name("童话(高清官方版)") == "童话"
+
+
+def test_clean_display_name_keeps_real_bracket_title():
+    from mp3organizer.organize import clean_display_name
+    # 括号里是真歌名/真信息，不在噪音词表里 → 保留
+    assert clean_display_name("黃明志【胡志明的雨】") == "黃明志【胡志明的雨】"
+
+
+def test_clean_display_name_standalone_noise_and_separators():
+    from mp3organizer.organize import clean_display_name
+    assert clean_display_name("篇章 with English 中英") == "篇章"
+    assert clean_display_name("张韶涵 _ 王赫野") == "张韶涵、王赫野"
+    assert clean_display_name("A / B") == "A、B"
+
+
+def test_clean_display_name_user_case():
+    """用户真实案例：标题标签里塞满演唱者/噪音。"""
+    from mp3organizer.organize import clean_display_name
+    messy = ("PLAY MUSIC - 篇章 Pages - 张韶涵 _ 王赫野 Angela Chang _ Wang HeYe"
+             "【动态歌词 lyric video】with English 中英")
+    got = clean_display_name(messy)
+    assert "动态歌词" not in got and "lyric video" not in got.lower()
+    assert "with English" not in got and not got.endswith("中英")
+    assert "、" in got  # 分隔符统一
+    assert "篇章" in got
+
+
+def test_target_path_personal_cleans_filename():
+    from mp3organizer.organize import target_path_personal
+    info = {"path": "/m/x.mp3",
+            "title": "篇章【动态歌词 lyric video】with English 中英",
+            "artist": "张韶涵 _ 王赫野"}
+    p = target_path_personal("/lib", info, "华语.双人", False)
+    assert p.name == "张韶涵、王赫野 - 篇章.mp3"
+
+
+def test_guess_by_rules_duet_with_ideographic_comma():
+    from mp3organizer.categories import guess_by_rules
+    assert guess_by_rules("张韶涵、王赫野", "篇章") == "华语.双人"
