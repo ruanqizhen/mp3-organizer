@@ -133,3 +133,32 @@ def test_gui_state_invalid_template_falls_back(monkeypatch, tmp_path):
         assert app._vars["dry_run"].get() is True  # 非 bool 不用
     finally:
         app.destroy()
+
+
+def test_llm_settings_missing_verify_keeps_new_default(monkeypatch, tmp_path):
+    """老版本存的 llm.json 没有 verify 键时，不把新默认值 True 抹成 False。"""
+    import json
+    cfg = tmp_path / ".config" / "mp3-organizer" / "llm.json"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(json.dumps({"enabled": True, "base_url": "https://x",
+                               "model": "m"}), encoding="utf-8")
+    app = _make_app(monkeypatch, tmp_path)
+    try:
+        assert app._llm_enabled.get() is True
+        assert app._llm_verify.get() is True  # 缺键 → 保留新默认
+    finally:
+        app.destroy()
+
+
+def test_llm_settings_explicit_verify_false_respected(monkeypatch, tmp_path):
+    """用户明确存过 verify=false 时，照旧恢复 False。"""
+    import json
+    cfg = tmp_path / ".config" / "mp3-organizer" / "llm.json"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(json.dumps({"enabled": True, "verify": False}),
+                   encoding="utf-8")
+    app = _make_app(monkeypatch, tmp_path)
+    try:
+        assert app._llm_verify.get() is False
+    finally:
+        app.destroy()
