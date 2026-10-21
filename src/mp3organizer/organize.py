@@ -80,18 +80,40 @@ def sanitize(name: str, max_len: int = 80) -> str:
 
 
 # 文件名噪音：括号段里含这些词整段删（注意不是无差别删括号，
-# 【胡志明的雨】这种真歌名不在此列）
+# 【胡志明的雨】这种真歌名不在此列；简繁都要收，用户文件名多为繁体）
 _FILENAME_NOISE_KEYWORDS = (
-    "歌词", "lyric", "video", "mv", "official", "官方",
-    "中英", "english", "字幕", "高清", "hd", "免费", "下载",
-    "www.", ".com", ".net", "320k", "flac", "无损", "动态",
+    "歌词", "歌詞", "lyric", "video", "mv", "official", "官方",
+    "中英", "english", "字幕", "高清", "hd", "免费", "免費",
+    "下载", "下載", "www.", ".com", ".net", "320k", "flac",
+    "无损", "無損", "动态", "動態",
 )
 
 _BRACKET_PAIRS = (("【", "】"), ("[", "]"), ("(", ")"),
                   ("（", "）"), ("「", "」"), ("『", "』"))
 
+# 歌词引用常包在『』「」里，里面多是完整句子（含中文标点）；
+# 真歌名/真信息极少用这种括号，含中文标点即视为歌词引用删掉
+_LYRIC_QUOTE_PAIRS = (("『", "』"), ("「", "」"))
+_LYRIC_PUNCT = ("，", "。", "！", "？", "；", "：")
+
 _STANDALONE_NOISE_RE = re.compile(
-    r"with\s+english|lyric\s+video|中英字幕|动态歌词", re.IGNORECASE)
+    r"with\s+english|lyric\s+video|中英字幕|动态歌词|動態歌詞", re.IGNORECASE)
+
+
+def _strip_lyric_quotes(text: str) -> str:
+    """删除『』「」里的歌词引用（如『若是晨風還沒來，晚風也可吹入懷』）。"""
+    for open_c, close_c in _LYRIC_QUOTE_PAIRS:
+        pattern = (re.escape(open_c) + r"[^" + re.escape(open_c + close_c)
+                   + r"]*" + re.escape(close_c))
+
+        def _repl(m: re.Match) -> str:
+            inner = m.group(0)[1:-1]
+            if any(p in inner for p in _LYRIC_PUNCT):
+                return ""
+            return m.group(0)
+
+        text = re.sub(pattern, _repl, text)
+    return text
 
 
 def _strip_noise_brackets(text: str) -> str:
@@ -110,19 +132,23 @@ def _strip_noise_brackets(text: str) -> str:
     return text
 
 
-def clean_display_name(text: str) -> str:
+def clean_display_name(text: str, *, is_artist: bool = False) -> str:
     """清理用于文件名的演唱者/标题显示值。
 
-    去掉噪音括号段（如【动态歌词 lyric video】）、独立噪音词
-    （with English、中英字幕等）、末尾孤立的"中英"；统一艺人分隔符
-    （" _ "、" / " → "、"）；压缩多余空白。
-    注意：只做机械清理。语义级拆分（中英重复、标题混入演唱者等）
-    靠大模型校对（--llm-verify），这里不动。
+    去掉噪音括号段（如【动态歌词 lyric video】）、『』「」里的歌词引用、
+    独立噪音词（with English、中英字幕等）、末尾孤立的"中英"；
+    统一分隔符（" _ "、" / " → "、"；演唱者栏里无空格的下划线也视为
+    多人分隔，如 王宇宙Leto_喬浚丞 → 王宇宙Leto、喬浚丞）；压缩多余空白。
+    注意：只做机械清理。语义级拆分（中英重复、标题混入演唱者、
+    频道名、备选标题等）靠大模型校对（--llm-verify），这里不动。
     """
-    text = _strip_noise_brackets(text or "")
+    text = _strip_lyric_quotes(text or "")
+    text = _strip_noise_brackets(text)
     text = _STANDALONE_NOISE_RE.sub("", text)
     text = re.sub(r"中英$", "", text)  # 末尾孤立的中英标记，如 "...with English 中英"
     text = text.replace(" _ ", "、").replace(" / ", "、")
+    if is_artist:
+        text = re.sub(r"(?<=[^\W_])_(?=[^\W_])", "、", text)
     text = re.sub(r"\s+", " ", text).strip(" -_")
     return text
 
@@ -131,7 +157,8 @@ def target_path(library: str | Path, info: dict) -> Path:
     """根据标签信息计算目标路径（不触碰文件系统）。"""
     library = Path(library)
     genre = sanitize(normalize_genre(info.get("genre")))
-    artist = sanitize(clean_display_name(info.get("artist") or UNKNOWN_ARTIST))
+    artist = sanitize(clean_display_name(info.get("artist") or UNKNOWN_ARTIST,
+                                         is_artist=True))
     album_raw = (info.get("album") or "").strip()
     album = sanitize(clean_display_name(album_raw)) if album_raw else ""
     title = sanitize(clean_display_name(
@@ -163,7 +190,7 @@ def target_path_personal(library: str | Path, info: dict,
     library = Path(library)
     category = sanitize(category or PENDING_CATEGORY)
     raw_artist = (info.get("artist") or "").strip()
-    cleaned_artist = clean_display_name(raw_artist)
+    cleaned_artist = clean_display_name(raw_artist, is_artist=True)
     artist = sanitize(cleaned_artist) if cleaned_artist else ""
     title = sanitize(clean_display_name(
         info.get("title") or Path(info.get("path", "未知")).stem))

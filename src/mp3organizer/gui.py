@@ -206,7 +206,7 @@ class App(tk.Tk):
         self._llm_enabled = tk.BooleanVar(value=False)
         ttk.Checkbutton(frm, text="启用：文件名用规则猜不出时，调用大模型",
                         variable=self._llm_enabled).pack(anchor="w", padx=8, pady=2)
-        self._llm_verify = tk.BooleanVar(value=False)
+        self._llm_verify = tk.BooleanVar(value=True)
         ttk.Checkbutton(frm, text="优先用大模型校对标签（含文件名验证，生成规范标签）",
                         variable=self._llm_verify).pack(anchor="w", padx=8, pady=2)
         self._llm_fields: dict[str, tk.StringVar] = {}
@@ -239,8 +239,12 @@ class App(tk.Tk):
         for key, var in self._llm_fields.items():
             if data.get(key):
                 var.set(data[key])
-        self._llm_enabled.set(bool(data.get("enabled")))
-        self._llm_verify.set(bool(data.get("verify")))
+        # 只在文件里有这个键时才覆盖：老版本存的 llm.json 没有 "verify" 键，
+        # 不能让缺失的键把新默认值（True）抹成 False；用户明确存过的 False 照旧
+        if "enabled" in data:
+            self._llm_enabled.set(bool(data["enabled"]))
+        if "verify" in data:
+            self._llm_verify.set(bool(data["verify"]))
 
     def _save_llm_settings(self) -> None:
         import json
