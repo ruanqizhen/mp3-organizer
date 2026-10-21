@@ -32,7 +32,8 @@ def _item(filename, title="", artist=""):
 
 
 def _fake_verify_factory(results_by_filename=None, calls=None):
-    def fake_verify(items, config, *, cache_dir=None, request_fn=None):
+    def fake_verify(items, config, *, cache_dir=None, request_fn=None,
+                    progress=None):
         if calls is not None:
             calls.append([it["filename"] for it in items])
         out = []
@@ -170,3 +171,50 @@ def test_fix_file_llm_verify_skipped_without_config(tmp_path):
     r = fix_file(p, llm_verify=True, llm_config=None)
     assert r["status"] == "unchanged"
     assert r["changes"] == []
+
+
+def test_query_cached_progress_per_batch(tmp_path):
+    """每批请求前回调 progress(done, total, label)，label 用 label_fn 算。"""
+    from mp3organizer.llm_tagger import _query_cached, SYSTEM_PROMPT
+    items = [{"title": "t%d" % i, "artist": "a", "album": "",
+              "genre": "", "year": "", "confidence": 0.9} for i in range(5)]
+    fake_post, _ = _fake_post(json.dumps(items))
+    seen = []
+    cfg = LLMConfig(base_url="https://fake.local", api_key="k", model="m",
+                    batch_size=2)
+    _query_cached(["f%d" % i for i in range(5)], cfg, SYSTEM_PROMPT, "x.json",
+                  cache_dir=tmp_path, request_fn=fake_post,
+                  progress=lambda d, t, label: seen.append((d, t, label)),
+                  label_fn=lambda k: "L-" + k)
+    assert seen == [(0, 5, "L-f0"), (2, 5, "L-f2"), (4, 5, "L-f4")]
+
+
+def test_verify_tags_progress_shows_filename(tmp_path):
+    """verify 的进度 label 是文件名，而不是内部 JSON key。"""
+    items = [_item("夜曲.mp3", "夜曲", "周杰伦"),
+             _item("红豆.mp3", "红豆", "王菲"),
+             _item("hello.mp3", "Hello", "Adele")]
+    want = [{"title": it["title"], "artist": it["artist"], "confidence": 0.9}
+            for it in items]
+    fake_post, _ = _fake_post(json.dumps(want, ensure_ascii=False))
+    seen = []
+    cfg = LLMConfig(base_url="https://fake.local", api_key="k", model="m",
+                    batch_size=2)
+    verify_tags(items, cfg, cache_dir=tmp_path, request_fn=fake_post,
+                progress=lambda d, t, label: seen.append((d, t, label)))
+    assert seen == [(0, 3, "夜曲.mp3"), (2, 3, "hello.mp3")]
+    assert all(not s[2].startswith("{") for s in seen)  # 不是 JSON key
+
+
+def test_classify_artists_progress_shows_artist(tmp_path):
+    """classify 的进度 label 是本批第一位演唱者。"""
+    from mp3organizer.llm_tagger import classify_artists
+    pairs = [("周杰伦", "夜曲"), ("王菲", "红豆"), ("Adele", "Hello")]
+    want = [{"category": "华语.男", "confidence": 0.9}] * 3
+    fake_post, _ = _fake_post(json.dumps(want, ensure_ascii=False))
+    seen = []
+    cfg = LLMConfig(base_url="https://fake.local", api_key="k", model="m",
+                    batch_size=2)
+    classify_artists(pairs, cfg, cache_dir=tmp_path, request_fn=fake_post,
+                     progress=lambda d, t, label: seen.append((d, t, label)))
+    assert seen == [(0, 3, "周杰伦"), (2, 3, "Adele")]

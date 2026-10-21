@@ -291,7 +291,8 @@ def test_pipeline_prebatch_verify_single_batch(tmp_path, monkeypatch):
         _make_clean_mp3(src / name, title, artist)
     calls = []
 
-    def fake_verify(items, config, *, cache_dir=None, request_fn=None):
+    def fake_verify(items, config, *, cache_dir=None, request_fn=None,
+                    progress=None):
         calls.append([it["filename"] for it in items])
         return [{"title": it["title"], "artist": it["artist"], "album": "",
                  "genre": "", "year": "", "track": "",
@@ -333,3 +334,37 @@ def test_pipeline_dry_run_keeps_empty_dirs(tmp_path):
                  mp3val_exe=None, ffmpeg_exe=None)
     assert (src / "sub" / "a.mp3").exists()
     assert (src / "sub").exists()
+
+
+def test_pipeline_llm_prebatch_reports_progress(tmp_path, monkeypatch):
+    """预批量时进度回调带 llm_verify phase，本批第一首歌名。"""
+    from mp3organizer.llm_tagger import LLMConfig
+    src = tmp_path / "src"
+    src.mkdir()
+    for name, title, artist in (("a.mp3", "夜曲", "周杰伦"),
+                                ("b.mp3", "红豆", "王菲"),
+                                ("c.mp3", "Hello", "Adele")):
+        _make_clean_mp3(src / name, title, artist)
+
+    def fake_verify(items, config, *, cache_dir=None, request_fn=None,
+                    progress=None):
+        # 模拟真实 verify_tags：逐批调 progress
+        bs = 2
+        for i in range(0, len(items), bs):
+            if progress is not None:
+                progress(i, len(items), items[i]["filename"])
+        return [{"title": it["title"], "artist": it["artist"], "album": "",
+                 "genre": "", "year": "", "track": "",
+                 "confidence": 0.9, "note": ""} for it in items]
+
+    monkeypatch.setattr("mp3organizer.llm_tagger.verify_tags", fake_verify)
+    cfg = LLMConfig(base_url="https://fake.local", api_key="k", model="m")
+    seen = []
+    run_pipeline(src, tmp_path / "lib", llm_config=cfg, llm_verify=True,
+                 do_check=False, do_cover=False,
+                 mp3val_exe=None, ffmpeg_exe=None,
+                 progress=lambda i, t, ph, msg: seen.append((ph, i, t, msg)))
+    llm_events = [e for e in seen if e[0] == "llm_verify"]
+    assert llm_events, "预批量应上报 llm_verify 进度"
+    assert llm_events[0][3] == "a.mp3"  # 第一批的第一首
+    assert llm_events[-1][1:3] == (2, 3)

@@ -27,6 +27,8 @@ from .report import build_html, build_csv
 
 PHASE_NAMES = {
     "scan": "扫描",
+    "llm_verify": "大模型校对标签",
+    "llm_classify": "大模型归类分类",
     "tags": "修复标签",
     "integrity": "完整性检查",
     "organize": "归类整理",
@@ -81,6 +83,7 @@ def _prebatch_verify(
     *,
     llm_config,
     llm_cache_dir: str | Path | None,
+    progress=None,
 ) -> tuple[dict[str, dict], dict[str, dict], str]:
     """预批量大模型标签校对。
 
@@ -89,6 +92,7 @@ def _prebatch_verify(
     verify_map[path] 为校对结果（失败时为 {}，主循环不再重试）；
     final_infos[path] 为叠加校对结果后的内存标签（供归类计数用）；
     error 非空表示整批请求失败。
+    progress(done, total, label)：每批请求前回调，label 为本批第一首歌。
     """
     from .llm_tagger import verify_tags
 
@@ -98,7 +102,8 @@ def _prebatch_verify(
         items.append({"filename": p.name, **{
             k: (info.get(k) or "") for k in _VERIFY_FIELDS[1:]}})
     try:
-        results = verify_tags(items, llm_config, cache_dir=llm_cache_dir)
+        results = verify_tags(items, llm_config, cache_dir=llm_cache_dir,
+                              progress=progress)
         error = ""
     except Exception as exc:  # noqa: BLE001 - 整批失败就整体回退
         results = [{} for _ in items]
@@ -124,10 +129,12 @@ def _prebatch_classify(
     *,
     llm_config,
     llm_cache_dir: str | Path | None,
+    progress=None,
 ) -> str:
     """预批量归类分类：把需要问大模型的演唱者一次性查完，写进缓存。
 
     主循环里 classify() 逐文件调用时会命中缓存，不再发请求。
+    progress(done, total, label)：每批请求前回调，label 为本批第一位演唱者。
     返回 error（空表示成功）。
     """
     from .llm_tagger import classify_artists
@@ -150,7 +157,8 @@ def _prebatch_classify(
     if not need:
         return ""
     try:
-        classify_artists(need, llm_config, cache_dir=llm_cache_dir)
+        classify_artists(need, llm_config, cache_dir=llm_cache_dir,
+                         progress=progress)
         return ""
     except Exception as exc:  # noqa: BLE001 - 失败则主循环逐文件重试
         return "%s: %s" % (type(exc).__name__, exc)
@@ -228,12 +236,14 @@ def run_pipeline(
     verify_map: dict[str, dict] = {}
     final_infos: dict[str, dict] = repaired_infos
     if do_tags and verify_enabled:
-        _p(0, total, "tags", "大模型批量校对标签…")
+        def _vp(done: int, total_b: int, label: str) -> None:
+            _p(done, total_b, "llm_verify", label)
         verify_map, final_infos, err = _prebatch_verify(
             files, repaired_infos,
-            llm_config=llm_config, llm_cache_dir=cache_opt)
+            llm_config=llm_config, llm_cache_dir=cache_opt,
+            progress=_vp)
         if err:
-            _p(0, total, "tags", f"批量校对失败，已回退：{err}")
+            _p(0, total, "llm_verify", f"批量校对失败，已回退：{err}")
 
     learned: dict[str, str] = {}
     if do_organize and template == TEMPLATE_PERSONAL and library is not None:
@@ -241,12 +251,14 @@ def run_pipeline(
 
     # 预批量 2：归类分类需要问大模型的演唱者，一次查完写进缓存
     if do_organize and template == TEMPLATE_PERSONAL and _llm_ready(llm_config):
-        _p(0, total, "organize", "大模型批量定归类分类…")
+        def _cp(done: int, total_b: int, label: str) -> None:
+            _p(done, total_b, "llm_classify", label)
         err = _prebatch_classify(files, final_infos, learned,
                                  llm_config=llm_config,
-                                 llm_cache_dir=cache_opt)
+                                 llm_cache_dir=cache_opt,
+                                 progress=_cp)
         if err:
-            _p(0, total, "organize", f"批量分类失败，主循环逐文件重试：{err}")
+            _p(0, total, "llm_classify", f"批量分类失败，主循环逐文件重试：{err}")
 
     # 个人模板：预先统计每演唱者文件数（用校对/修复后的演唱者名）；
     # 达到阈值才建演唱者子目录
