@@ -190,3 +190,67 @@ def test_pipeline_dry_run_uses_fixed_tags_for_organize(tmp_path):
     assert rec["tag_status"] == "fixed"
     assert rec["new_path"] == str(lib / "华语.男" / "光良" / "光良 - 童话.mp3")
     assert p.exists()  # 试运行：源文件还在
+
+
+def test_pipeline_stop_event_aborts_early(tmp_path):
+    """预先置起 stop_event：一个文件都不碰，直接返回 stopped。"""
+    import threading
+    src = tmp_path / "src"
+    src.mkdir()
+    _make_clean_mp3(src / "a.mp3", "夜曲", "周杰伦")
+    ev = threading.Event()
+    ev.set()
+    result = run_pipeline(src, tmp_path / "lib", do_cover=False,
+                          mp3val_exe=None, ffmpeg_exe=None, stop_event=ev)
+    assert result["stopped"] is True
+    assert result["records"] == []
+    assert (src / "a.mp3").exists()
+
+
+def test_pipeline_stop_mid_run_flushes_partial(tmp_path):
+    """跑一半停止：已动过标签/检查的文件进报告并标 stopped。"""
+    import threading
+    src = tmp_path / "src"
+    src.mkdir()
+    _make_clean_mp3(src / "a.mp3", "夜曲", "周杰伦")
+    _make_clean_mp3(src / "b.mp3", "红豆", "王菲")
+    ev = threading.Event()
+
+    def _progress(i, total, phase, message):
+        if phase == "tags" and i >= 1:
+            ev.set()  # 第一个文件标签步之后就停
+
+    result = run_pipeline(src, tmp_path / "lib", do_cover=False,
+                          mp3val_exe=None, ffmpeg_exe=None,
+                          stop_event=ev, progress=_progress)
+    assert result["stopped"] is True
+    assert len(result["records"]) == 1
+    rec = result["records"][0]
+    assert rec["organize_status"] == "stopped"
+    assert "cover_status" not in rec  # do_cover=False，本来就没有
+
+
+def test_pipeline_stop_during_organize(tmp_path):
+    """归类中停止：已搬的留下，未搬的标 stopped 留在源目录。"""
+    import threading
+    src = tmp_path / "src"
+    src.mkdir()
+    _make_clean_mp3(src / "a.mp3", "夜曲", "周杰伦")
+    _make_clean_mp3(src / "b.mp3", "红豆", "王菲")
+    lib = tmp_path / "lib"
+    ev = threading.Event()
+
+    def _progress(i, total, phase, message):
+        if phase == "organize" and i >= 1:
+            ev.set()
+
+    result = run_pipeline(src, lib, do_cover=False,
+                          mp3val_exe=None, ffmpeg_exe=None,
+                          stop_event=ev, progress=_progress)
+    by_name = {Path(r["path"]).name: r for r in result["records"]}
+    assert result["stopped"] is True
+    assert by_name["a.mp3"]["organize_status"] == "moved"
+    assert by_name["b.mp3"]["organize_status"] == "stopped"
+    assert (lib / "待分类" / "周杰伦 - 夜曲.mp3").exists()
+    assert not (src / "a.mp3").exists()
+    assert (src / "b.mp3").exists()

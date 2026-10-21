@@ -18,6 +18,33 @@ from .encoding import CANDIDATE_ENCODINGS
 from .organize import TEMPLATE_PERSONAL, TEMPLATE_CLASSIC
 
 
+def format_current_file(phase: str, message: str, root: str | None = None) -> str:
+    """进度区"当前文件"行的显示文本。
+
+    文件阶段显示相对源目录的路径（过长只留尾部），其余阶段显示消息原文。
+    """
+    if phase in ("tags", "integrity", "organize", "cover") and message:
+        if root:
+            try:
+                text = os.path.relpath(message, root)
+            except ValueError:
+                text = message
+        else:
+            text = message
+    else:
+        text = message or ""
+    return text if len(text) <= 90 else "…" + text[-89:]
+
+
+def finish_texts(result: dict) -> tuple[str, str]:
+    """完成/停止后状态行与当前文件行的显示文本。"""
+    if result.get("stopped"):
+        done = len(result.get("records", []))
+        total = result.get("total", done)
+        return ("已停止（已处理 %d/%d）" % (done, total), "已停止")
+    return ("完成，共 %d 个文件" % result.get("total", 0), "处理完成")
+
+
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -26,6 +53,8 @@ class App(tk.Tk):
         self._queue: queue.Queue = queue.Queue()
         self._running = False
         self._report_path: str | None = None
+        self._src_root: str | None = None
+        self._stop_event = None
         self._build_widgets()
 
     def _build_widgets(self) -> None:
@@ -89,6 +118,9 @@ class App(tk.Tk):
         runfrm.pack(fill="x", **pad)
         self._start_btn = ttk.Button(runfrm, text="开始处理", command=self._start)
         self._start_btn.pack(side="left")
+        self._stop_btn = ttk.Button(runfrm, text="停止", command=self._request_stop,
+                                    state="disabled")
+        self._stop_btn.pack(side="left", padx=(8, 0))
         self._report_btn = ttk.Button(runfrm, text="打开 HTML 报告",
                                       command=self._open_report, state="disabled")
         self._report_btn.pack(side="left", padx=8)
@@ -96,6 +128,8 @@ class App(tk.Tk):
         self._status.pack(side="left", padx=8)
         self._bar = ttk.Progressbar(self, mode="determinate", maximum=100)
         self._bar.pack(fill="x", **pad)
+        self._current = ttk.Label(self, text="", anchor="w")
+        self._current.pack(fill="x", **pad)
 
         self._log = scrolledtext.ScrolledText(self, height=16, state="disabled")
         self._log.pack(fill="both", expand=True, **pad)
@@ -211,8 +245,12 @@ class App(tk.Tk):
             return
         self._save_llm_settings()
 
+        self._src_root = root
+        self._stop_event = threading.Event()
         self._running = True
         self._start_btn.configure(state="disabled")
+        self._stop_btn.configure(state="normal")
+        self._current.configure(text="")
         self._report_btn.configure(state="disabled")
         self._report_path = str(Path(root) / "mp3整理报告.html")
         self._log_line("=" * 40)
@@ -238,6 +276,7 @@ class App(tk.Tk):
             guess_from_filename=self._vars["guess"].get(),
             llm_config=llm_config,
             merge_mode=self._vars["merge_mode"].get(),
+            stop_event=self._stop_event,
             template=self._template.get(),
             subdir_threshold=subdir_threshold,
             min_score=min_score,
@@ -247,6 +286,12 @@ class App(tk.Tk):
                          args=(root, library or None, args),
                          daemon=True).start()
         self.after(120, self._poll)
+
+    def _request_stop(self) -> None:
+        if self._stop_event is not None:
+            self._stop_event.set()
+        self._stop_btn.configure(state="disabled")
+        self._log_line("已请求停止，当前文件处理完后停下")
 
     def _worker(self, root: str, library: str | None, args: dict) -> None:
         try:
@@ -270,6 +315,8 @@ class App(tk.Tk):
                     self._bar["value"] = pct
                     name = PHASE_NAMES.get(phase, phase)
                     self._status.configure(text="%s %d/%d" % (name, i, total))
+                    self._current.configure(
+                        text=format_current_file(phase, text, self._src_root))
                 elif kind == "done":
                     self._finish(msg[1])
                     return
@@ -284,11 +331,14 @@ class App(tk.Tk):
     def _finish(self, result: dict | None) -> None:
         self._running = False
         self._start_btn.configure(state="normal")
+        self._stop_btn.configure(state="disabled")
         self._bar["value"] = 100 if result else 0
         if result is None:
             self._status.configure(text="出错，已停止")
             return
-        self._status.configure(text="完成，共 %d 个文件" % result["total"])
+        status_text, current_text = finish_texts(result)
+        self._status.configure(text=status_text)
+        self._current.configure(text=current_text)
         self._log_line("-" * 40)
         for k, v in sorted(result["counts"].items()):
             self._log_line("%s: %d" % (k, v))

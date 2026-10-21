@@ -72,6 +72,7 @@ def run_pipeline(
     subdir_threshold: int = 3,
     merge_mode: bool = False,
     on_duplicate: str = "skip",
+    stop_event=None,
     progress=None,
 ) -> dict:
     """执行完整流水线，返回 {"records", "total", "counts"}。
@@ -80,6 +81,8 @@ def run_pipeline(
     phase 取值见 PHASE_NAMES 的键。
     template: personal（默认）或 classic；personal 下先学现有库再批量归类。
     subdir_threshold: personal 下同演唱者达到该数量才建子目录。
+    stop_event: threading.Event（或任何有 is_set() 的对象），置起后在
+    当前文件处理完后停下；已动过的文件进报告并标 stopped。
     """
     if do_organize and not library:
         raise ValueError("启用归类整理时必须指定 library（音乐库目录）")
@@ -99,7 +102,15 @@ def run_pipeline(
     learned: dict[str, str] = {}
     if do_organize and template == TEMPLATE_PERSONAL and library is not None:
         learned = learn_from_library(library)
+
+    stopped = False
+
+    def _cancelled() -> bool:
+        return stop_event is not None and stop_event.is_set()
     for i, p in enumerate(files, 1):
+        if _cancelled():
+            stopped = True
+            break
         rec: dict = {"path": str(p), "tag_changes": [], "new_path": ""}
         info = read_info(p)
 
@@ -147,13 +158,17 @@ def run_pipeline(
 
     # 归类整理与专辑封面（个人模板需整批先计数，再逐个搬运）
     counts: Counter = Counter()
-    if do_organize and template == TEMPLATE_PERSONAL:
+    if not stopped and do_organize and template == TEMPLATE_PERSONAL:
         for _, info, _ in pending:
             key = normalize_artist(info.get("artist"))
             if key:
                 counts[key] += 1
     n_pending = len(pending)
+    processed = 0
     for j, (p, info, rec) in enumerate(pending, 1):
+        if _cancelled():
+            stopped = True
+            break
         target = p
         # 归类整理
         if do_organize:
@@ -204,13 +219,24 @@ def run_pipeline(
             rec["cover_status"] = "skipped"
 
         records.append(rec)
+        processed = j
+
+    for _, _, rec in pending[processed:]:
+        if do_organize:
+            rec["organize_status"] = "stopped"
+        if do_cover:
+            rec["cover_status"] = "stopped"
+        records.append(rec)
 
     _p(total, total, "report", "生成报告")
     if report_html:
         build_html(records, report_html)
     if report_csv:
         build_csv(records, report_csv)
-    _p(total, total, "done", f"处理完成：{len(records)} 个文件")
+    if stopped:
+        _p(total, total, "done", f"已停止：已处理 {len(records)}/{total} 个文件")
+    else:
+        _p(total, total, "done", f"处理完成：{len(records)} 个文件")
 
     counts: dict[str, int] = {}
     for r in records:
@@ -218,4 +244,5 @@ def run_pipeline(
             base = str(r.get(key, "")).split("（")[0]  # 去掉备注括号，只按基础状态计数
             k = f"{key}={base}"
             counts[k] = counts.get(k, 0) + 1
-    return {"records": records, "total": total, "counts": counts}
+    return {"records": records, "total": total, "counts": counts,
+            "stopped": stopped}
