@@ -91,7 +91,7 @@ def test_fix_file_llm_verify_cleans_messy_title(tmp_path, monkeypatch):
     messy = "Namewee 黃明志【胡志明的雨】Ft. 越南小天王胡光孝 亞洲通吃 2017 All Eat Asia"
     p = tmp_path / (messy + ".mp3")
     _make_tagged_mp3(p, messy, "Namewee")
-    verified = {"title": "胡志明的雨", "artist": "黃明志、胡光孝",
+    verified = {"title": "胡志明的雨", "artist": "黃明志, 胡光孝",
                 "album": "亞洲通吃", "genre": "流行", "year": "2017",
                 "track": "", "confidence": 0.9, "note": "拆分标题"}
     calls = []
@@ -101,7 +101,7 @@ def test_fix_file_llm_verify_cleans_messy_title(tmp_path, monkeypatch):
     assert r["status"] == "verified"
     audio = ID3(str(p))
     assert audio["TIT2"].text[0] == "胡志明的雨"
-    assert audio["TPE1"].text[0] == "黃明志、胡光孝"
+    assert audio["TPE1"].text[0] == "黃明志, 胡光孝"
     assert audio["TALB"].text[0] == "亞洲通吃"
     assert str(audio["TDRC"].text[0]) == "2017"  # TDRC 读出是 ID3TimeStamp
     assert any(c.get("verified") for c in r["changes"])
