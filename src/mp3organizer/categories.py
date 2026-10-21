@@ -115,7 +115,7 @@ def guess_by_rules(artist: str, title: str = "", genre: str = "") -> str | None:
     if g and any(k in g for k in PURE_MUSIC_KEYWORDS):
         return "纯音乐"
     a = artist or ""
-    if ("," in a or "，" in a) and _has_cjk(a):
+    if ("," in a or "，" in a or "、" in a) and _has_cjk(a):
         return "华语.双人"
     combined = f"{a} {title or ''}"
     if _has_other_script(combined):
