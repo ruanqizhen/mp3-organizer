@@ -31,6 +31,8 @@ class LLMConfig:
     # 整批失败时只浪费 10 个（失败无部分重试）。
     batch_size: int = 10
     timeout: int = 60
+    # 是否用本地缓存。False 时每次都重新调用大模型，不读也不写缓存。
+    use_cache: bool = True
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
@@ -171,7 +173,8 @@ def _query_cached(
     """
     if not config.is_configured():
         raise LLMError("大模型未配置：需要 API 地址和模型名")
-    cache = _load_cache(cache_dir, cache_name)
+    # use_cache=False 时不读也不写缓存，每次都重新调用
+    cache = _load_cache(cache_dir, cache_name) if config.use_cache else {}
     todo = [f for f in filenames if f not in cache]
     if stats is not None:
         stats.update(total=len(filenames),
@@ -187,7 +190,8 @@ def _query_cached(
         results = _query_batch(batch, config, system_prompt, request_fn)
         for name, item in zip(batch, results):
             cache[name] = item
-        _save_cache(cache_dir, cache_name, cache)
+        if config.use_cache:
+            _save_cache(cache_dir, cache_name, cache)
     return [cache.get(f, {}) for f in filenames]
 
 
@@ -279,7 +283,7 @@ def classify_artists(
         raise LLMError("大模型未配置：需要 API 地址和模型名")
     keys = [normalize_artist(a) or ("title:" + t.strip().casefold())
             for a, t in pairs]
-    cache = _load_cache(cache_dir, "llm_classify.json")
+    cache = _load_cache(cache_dir, "llm_classify.json") if config.use_cache else {}
     seen = set(cache)
     todo = []
     for i, k in enumerate(keys):
@@ -301,7 +305,8 @@ def classify_artists(
         results = _query_batch(batch, config, CLASSIFY_SYSTEM_PROMPT, request_fn)
         for i, item in zip(batch_idx, results):
             cache[keys[i]] = item
-        _save_cache(cache_dir, "llm_classify.json", cache)
+        if config.use_cache:
+            _save_cache(cache_dir, "llm_classify.json", cache)
     return [cache.get(k, {}) for k in keys]
 
 
