@@ -43,6 +43,8 @@ def _add_llm_args(p: argparse.ArgumentParser) -> None:
                         "生成规范的标题/演唱者/专辑/类型/年份（已是 --llm 的默认行为，此开关显式启用）")
     p.add_argument("--no-llm-verify", action="store_true",
                    help="关闭大模型标签校对，只用大模型猜标签/定分类")
+    p.add_argument("--no-llm-cache", action="store_true",
+                   help="不使用大模型本地缓存，每次运行都重新调用")
     p.add_argument("--llm-base-url", default=None,
                    help="大模型 API 地址（OpenAI 兼容），默认取环境变量 MP3ORGANIZER_LLM_BASE_URL，否则为 DeepSeek")
     p.add_argument("--llm-api-key", default=None,
@@ -71,6 +73,7 @@ def _llm_config_from_args(args: argparse.Namespace):
         or os.environ.get("DEEPSEEK_API_KEY", ""),
         model=args.llm_model
         or os.environ.get("MP3ORGANIZER_LLM_MODEL", "deepseek-chat"),
+        use_cache=not getattr(args, "no_llm_cache", False),
     )
     if not cfg.is_configured():
         raise SystemExit("启用 --llm 需要提供 API 地址和模型名（--llm-base-url / --llm-model）")

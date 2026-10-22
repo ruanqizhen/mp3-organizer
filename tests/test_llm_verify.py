@@ -239,3 +239,20 @@ def test_query_cached_stats_reports_cache_hits(tmp_path):
                   request_fn=fake_post, stats=st2)
     assert st2 == {"total": 5, "cached": 5, "queried": 0}
     assert len(calls) == 1
+
+
+def test_query_cached_no_cache_always_calls(tmp_path):
+    """use_cache=False 时不读也不写缓存，每次都调大模型。"""
+    from pathlib import Path
+    from mp3organizer.llm_tagger import _query_cached, SYSTEM_PROMPT
+    items = [{"title": "t0", "artist": "a", "album": "",
+              "genre": "", "year": "", "confidence": 0.9}]
+    fake_post, calls = _fake_post(json.dumps(items))
+    cfg = LLMConfig(base_url="https://fake.local", api_key="k", model="m",
+                    batch_size=10, use_cache=False)
+    _query_cached(["f0"], cfg, SYSTEM_PROMPT, "nc.json", cache_dir=tmp_path,
+                  request_fn=fake_post)
+    _query_cached(["f0"], cfg, SYSTEM_PROMPT, "nc.json", cache_dir=tmp_path,
+                  request_fn=fake_post)
+    assert len(calls) == 2  # 两次都实际调用
+    assert not (Path(tmp_path) / "nc.json").exists()  # 没写缓存文件
