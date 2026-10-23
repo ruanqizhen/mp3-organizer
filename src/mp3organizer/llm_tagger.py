@@ -31,6 +31,8 @@ class LLMConfig:
     # 整批失败时只浪费 10 个（失败无部分重试）。
     batch_size: int = 10
     timeout: int = 60
+    # 是否用本地缓存。False 时每次都重新调用大模型，不读也不写缓存。
+    use_cache: bool = True
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
@@ -158,18 +160,26 @@ def _query_cached(
     request_fn=None,
     progress=None,
     label_fn=None,
+    stats: dict | None = None,
 ) -> list[dict]:
     """批量查询，带本地缓存。返回与 filenames 一一对应的结果 dict 列表。
 
     request_fn(url, headers, payload, timeout) -> 响应 JSON（dict），供测试注入。
     progress(done, total, label)：每批请求前回调一次，label 为本批第一项的
     显示名（label_fn(key) 算出；不传则直接用 key）。
+    stats：可选 dict，填入 {"total": 总数, "cached": 缓存命中数,
+    "queried": 实际请求数}，供调用方显示。
     失败时抛 LLMError；调用前请确认 config.is_configured()。
     """
     if not config.is_configured():
         raise LLMError("大模型未配置：需要 API 地址和模型名")
-    cache = _load_cache(cache_dir, cache_name)
+    # use_cache=False 时不读也不写缓存，每次都重新调用
+    cache = _load_cache(cache_dir, cache_name) if config.use_cache else {}
     todo = [f for f in filenames if f not in cache]
+    if stats is not None:
+        stats.update(total=len(filenames),
+                     cached=len(filenames) - len(todo),
+                     queried=len(todo))
     total = len(todo)
     bs = max(1, config.batch_size)
     for i in range(0, len(todo), bs):
@@ -180,7 +190,8 @@ def _query_cached(
         results = _query_batch(batch, config, system_prompt, request_fn)
         for name, item in zip(batch, results):
             cache[name] = item
-        _save_cache(cache_dir, cache_name, cache)
+        if config.use_cache:
+            _save_cache(cache_dir, cache_name, cache)
     return [cache.get(f, {}) for f in filenames]
 
 
@@ -262,6 +273,7 @@ def classify_artists(
     cache_dir: str | Path | None = None,
     request_fn=None,
     progress=None,
+    stats: dict | None = None,
 ) -> list[dict]:
     """演唱者 → 语言.性别分类。pairs 为 [(artist, title)]，按演唱者缓存。
 
@@ -271,7 +283,7 @@ def classify_artists(
         raise LLMError("大模型未配置：需要 API 地址和模型名")
     keys = [normalize_artist(a) or ("title:" + t.strip().casefold())
             for a, t in pairs]
-    cache = _load_cache(cache_dir, "llm_classify.json")
+    cache = _load_cache(cache_dir, "llm_classify.json") if config.use_cache else {}
     seen = set(cache)
     todo = []
     for i, k in enumerate(keys):
@@ -279,6 +291,9 @@ def classify_artists(
             seen.add(k)
             todo.append(i)
     total = len(todo)
+    if stats is not None:
+        stats.update(total=len(pairs), cached=len(pairs) - total,
+                     queried=total)
     bs = max(1, config.batch_size)
     for s in range(0, len(todo), bs):
         batch_idx = todo[s:s + bs]
@@ -290,7 +305,8 @@ def classify_artists(
         results = _query_batch(batch, config, CLASSIFY_SYSTEM_PROMPT, request_fn)
         for i, item in zip(batch_idx, results):
             cache[keys[i]] = item
-        _save_cache(cache_dir, "llm_classify.json", cache)
+        if config.use_cache:
+            _save_cache(cache_dir, "llm_classify.json", cache)
     return [cache.get(k, {}) for k in keys]
 
 
@@ -337,6 +353,7 @@ def verify_tags(
     cache_dir: str | Path | None = None,
     request_fn=None,
     progress=None,
+    stats: dict | None = None,
 ) -> list[dict]:
     """大模型优先校对标签：文件名 + 现有标签 → 规范的 title/artist/album/genre/year/track。
 
@@ -352,5 +369,5 @@ def verify_tags(
     name_of = {k: (it.get("filename") or "") for k, it in zip(keys, items)}
     return _query_cached(keys, config, VERIFY_SYSTEM_PROMPT, "llm_verify.json",
                          cache_dir=cache_dir, request_fn=request_fn,
-                         progress=progress,
+                         progress=progress, stats=stats,
                          label_fn=lambda k: name_of.get(k) or k)

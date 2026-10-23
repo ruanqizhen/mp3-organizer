@@ -209,6 +209,9 @@ class App(tk.Tk):
         self._llm_verify = tk.BooleanVar(value=True)
         ttk.Checkbutton(frm, text="优先用大模型校对标签（含文件名验证，生成规范标签）",
                         variable=self._llm_verify).pack(anchor="w", padx=8, pady=2)
+        self._llm_no_cache = tk.BooleanVar(value=True)
+        ttk.Checkbutton(frm, text="不使用大模型本地缓存（每次运行都重新调用）",
+                        variable=self._llm_no_cache).pack(anchor="w", padx=8, pady=2)
         self._llm_fields: dict[str, tk.StringVar] = {}
         for key, label, default in (
                 ("base_url", "API 地址", "https://api.deepseek.com"),
@@ -245,11 +248,14 @@ class App(tk.Tk):
             self._llm_enabled.set(bool(data["enabled"]))
         if "verify" in data:
             self._llm_verify.set(bool(data["verify"]))
+        if "no_cache" in data:
+            self._llm_no_cache.set(bool(data["no_cache"]))
 
     def _save_llm_settings(self) -> None:
         import json
         data = {"enabled": self._llm_enabled.get(),
-                "verify": self._llm_verify.get()}
+                "verify": self._llm_verify.get(),
+                "no_cache": self._llm_no_cache.get()}
         data.update({k: v.get().strip() for k, v in self._llm_fields.items()})
         p = self._llm_config_file()
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -266,6 +272,7 @@ class App(tk.Tk):
             api_key=self._llm_fields["api_key"].get().strip()
             or os.environ.get("MP3ORGANIZER_LLM_API_KEY", ""),
             model=self._llm_fields["model"].get().strip() or "deepseek-chat",
+            use_cache=not self._llm_no_cache.get(),
         )
         if not cfg.is_configured():
             return None, "请填写 API 地址和模型名"
