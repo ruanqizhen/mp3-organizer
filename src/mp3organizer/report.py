@@ -20,6 +20,12 @@ def _fmt_changes(changes: list[dict]) -> str:
             mark = "（大模型猜测·置信度%s）" % c["confidence"]
         elif enc == "llm":
             mark = "（大模型猜测）"
+        elif enc == "llm_verify" and c.get("confidence"):
+            mark = "（大模型校对·置信度%s）" % c["confidence"]
+        elif enc == "llm_verify":
+            mark = "（大模型校对）"
+        elif enc == "t2s":
+            mark = "（繁转简）"
         elif enc == "filename":
             mark = "（文件名猜测）"
         else:

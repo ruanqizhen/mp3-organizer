@@ -160,3 +160,9 @@ def test_classify_artists_caches_by_artist(tmp_path):
     assert (tmp_path / "llm_classify.json").exists()
     assert not (tmp_path / "llm_tags.json").exists()
     assert "华语.男" in calls[0]["payload"]["messages"][0]["content"]
+
+
+def test_rename_prompt_covers_series_prefix():
+    from mp3organizer.llm_tagger import RENAME_SYSTEM_PROMPT
+    assert "Classic Oldies" in RENAME_SYSTEM_PROMPT
+    assert "简体" in RENAME_SYSTEM_PROMPT

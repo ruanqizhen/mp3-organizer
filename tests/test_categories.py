@@ -122,3 +122,9 @@ def test_canonical_categories_stable():
         "华语.女", "华语.男", "华语.组合", "华语.双人",
         "英语", "纯音乐", "其它语言",
     }
+
+
+def test_normalize_artist_simplifies_script():
+    from mp3organizer.categories import normalize_artist
+    assert normalize_artist("鄧紫棋") == normalize_artist("邓紫棋") == "邓紫棋"
+    assert normalize_artist("GEM鄧紫棋") == "gem邓紫棋"

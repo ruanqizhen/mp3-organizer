@@ -8,6 +8,7 @@ dependencies = [
     "mutagen>=1.45",
     "musicbrainzngs>=0.7",
     "requests>=2.28",
+    "opencc-python-reimplemented>=0.1.7",
 ]
 
 [project.scripts]

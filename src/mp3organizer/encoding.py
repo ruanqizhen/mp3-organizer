@@ -21,6 +21,8 @@ from pathlib import Path
 
 from mutagen.id3 import ID3, ID3NoHeaderError, Encoding, TIT2, TPE1, TALB, TRCK, TCON, TDRC
 
+from .textnorm import to_simplified
+
 CANDIDATE_ENCODINGS: tuple[str, ...] = ("gbk", "big5", "shift_jis", "euc-kr", "utf-8")
 
 
@@ -117,7 +119,7 @@ def _apply_guess(audio: ID3, guess: dict, source: str = "filename") -> list[dict
     mapping = (("TIT2", "title"), ("TPE1", "artist"), ("TALB", "album"),
                ("TCON", "genre"), ("TDRC", "year"), ("TRCK", "track"))
     for frame_id, key in mapping:
-        value = (guess.get(key) or "").strip()
+        value = to_simplified((guess.get(key) or "").strip())
         if not value:
             continue
         frame = audio.get(frame_id)
@@ -210,7 +212,8 @@ def _build_tag_from_filename(
                 from .llm_tagger import verify_tags
                 fn = _verify_fn or verify_tags
                 verified = fn(
-                    [{"filename": display_name, "title": "", "artist": "",
+                    [{"path": _fixed_relpath(path, backup_root),
+                      "filename": display_name, "title": "", "artist": "",
                       "album": "", "genre": "", "year": "", "track": ""}],
                     llm_config, cache_dir=llm_cache_dir)[0]
             except Exception as exc:  # noqa: BLE001 - 失败就回退正则
@@ -249,6 +252,38 @@ def _build_tag_from_filename(
     return result
 
 
+def _fixed_relpath(path: Path, root: str | Path | None) -> str:
+    """相对路径（目录逐段修乱码），供大模型参考。"""
+    from .scanner import display_relpath
+    return "/".join(fix_text(seg)[0]
+                    for seg in display_relpath(path, root).split("/"))
+
+
+def _simplify_frames(audio: ID3, result: dict) -> None:
+    """中文标签转简体，每条改动记 encoding="t2s"。"""
+    for frame_id in ("TIT2", "TPE1", "TALB", "TCON"):
+        frame = audio.get(frame_id)
+        text = getattr(frame, "text", None)
+        if not isinstance(text, list):
+            continue
+        new_text = []
+        changed = False
+        for item in text:
+            if isinstance(item, str):
+                fixed = to_simplified(item)
+                if fixed != item:
+                    result["changes"].append(
+                        {"frame": frame_id, "old": item, "new": fixed,
+                         "encoding": "t2s"})
+                    changed = True
+                new_text.append(fixed)
+            else:
+                new_text.append(item)
+        if changed:
+            frame.text = new_text
+            frame.encoding = Encoding.UTF8
+
+
 def fix_file(
     path: str | Path,
     *,
@@ -277,6 +312,7 @@ def fix_file(
     llm_verify=True 且大模型可用时：编码修复后，优先把文件名+现有标签
     发给大模型做整体校对，用返回的规范标签覆盖（_verify_fn 供测试注入；
     llm_verify_result 可传入预批量查询的结果，避免重复请求）。
+    中文标签统一转简体（繁转简改动记 encoding="t2s"）。
     """
     path = Path(path)
     result: dict = {
@@ -337,7 +373,8 @@ def fix_file(
     if llm_verify and llm_config is not None and llm_config.is_configured():
         # 大模型优先校对：文件名 + 编码修复后的标签 → 规范标签（覆盖式）
         item = {
-            "filename": path.name,
+            "path": _fixed_relpath(path, backup_root),
+            "filename": fix_text(path.name)[0],
             "title": _frame_text(audio, "TIT2"),
             "artist": _frame_text(audio, "TPE1"),
             "album": _frame_text(audio, "TALB"),
@@ -374,6 +411,8 @@ def fix_file(
         filled = _apply_guess(audio, guess, source)
         if filled:
             result["changes"] = filled
+
+    _simplify_frames(audio, result)
 
     if not result["changes"]:
         return result

@@ -163,6 +163,7 @@ def cmd_organize(args: argparse.Namespace) -> int:
             if key:
                 counts[key] += 1
     llm_config = _llm_config_from_args(args)
+    from .pipeline import _remove_empty_dirs_up_to
     records = []
     for p, info in infos:
         kwargs: dict = {"template": args.template}
@@ -175,6 +176,8 @@ def cmd_organize(args: argparse.Namespace) -> int:
                 args.library, category, info.get("artist") or "",
                 counts.get(key, 0), args.subdir_threshold))
         r = organize_file(p, args.library, info, dry_run=args.dry_run, **kwargs)
+        if not args.dry_run and r["status"] == "moved":
+            _remove_empty_dirs_up_to(p, args.root)
         new_path = r["dest"]
         if r.get("category") == PENDING_CATEGORY:
             new_path += "（待确认分类）"
@@ -196,6 +199,8 @@ def cmd_check(args: argparse.Namespace) -> int:
         new_path = ""
         if chk.status in ("broken", "unreadable") and not args.dry_run and args.quarantine_dir:
             new_path = str(quarantine(p, args.quarantine_dir)) + "（已隔离）"
+            from .pipeline import _remove_empty_dirs_up_to
+            _remove_empty_dirs_up_to(p, args.root)
             print(f"[损坏] {p} → {new_path}")
         elif chk.status == "fixed":
             print(f"[已修复] {p}")

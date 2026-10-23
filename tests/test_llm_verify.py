@@ -83,6 +83,9 @@ def test_verify_prompt_covers_key_points():
     assert "filename" in VERIFY_SYSTEM_PROMPT
     assert "Jay Chou" in VERIFY_SYSTEM_PROMPT
     assert "周杰伦" in VERIFY_SYSTEM_PROMPT
+    assert "path" in VERIFY_SYSTEM_PROMPT
+    assert "简体" in VERIFY_SYSTEM_PROMPT
+    assert "邓紫棋" in VERIFY_SYSTEM_PROMPT
 
 
 # ---------- fix_file 接入 ----------
@@ -101,8 +104,9 @@ def test_fix_file_llm_verify_cleans_messy_title(tmp_path, monkeypatch):
     assert r["status"] == "verified"
     audio = ID3(str(p))
     assert audio["TIT2"].text[0] == "胡志明的雨"
-    assert audio["TPE1"].text[0] == "黃明志, 胡光孝"
-    assert audio["TALB"].text[0] == "亞洲通吃"
+    assert audio["TPE1"].text[0] == "黄明志, 胡光孝"  # 大模型漏简体时 t2s 兜底
+    assert audio["TALB"].text[0] == "亚洲通吃"
+    assert any(c["encoding"] == "t2s" for c in r["changes"])
     assert str(audio["TDRC"].text[0]) == "2017"  # TDRC 读出是 ID3TimeStamp
     assert any(c.get("verified") for c in r["changes"])
     assert len(calls) == 1  # 单文件只查一次
@@ -220,6 +224,7 @@ def test_classify_artists_progress_shows_artist(tmp_path):
     assert seen == [(0, 3, "周杰伦"), (2, 3, "Adele")]
 
 
+<<<<<<< Updated upstream
 def test_query_cached_stats_reports_cache_hits(tmp_path):
     """stats 报出总数/缓存命中/实际调用数。"""
     from mp3organizer.llm_tagger import _query_cached, SYSTEM_PROMPT
@@ -256,3 +261,39 @@ def test_query_cached_no_cache_always_calls(tmp_path):
                   request_fn=fake_post)
     assert len(calls) == 2  # 两次都实际调用
     assert not (Path(tmp_path) / "nc.json").exists()  # 没写缓存文件
+=======
+def test_verify_tags_sends_path(tmp_path):
+    """校验请求带上相对路径。"""
+    from mp3organizer.llm_tagger import verify_tags
+    body = [{"title": "t", "artist": "a", "album": "", "genre": "",
+             "year": "", "track": "", "confidence": 0.9, "note": ""}]
+    fake_post, calls = _fake_post(json.dumps(body))
+    items = [{"path": "待整理/子/周杰伦 - 夜曲.mp3",
+              "filename": "周杰伦 - 夜曲.mp3", "title": "夜曲",
+              "artist": "周杰伦", "album": "", "genre": "", "year": "",
+              "track": ""}]
+    res = verify_tags(items, CFG, cache_dir=tmp_path, request_fn=fake_post)
+    assert res[0]["title"] == "t"
+    sent = calls[0]["messages"][-1]["content"]
+    assert "待整理/子/周杰伦 - 夜曲.mp3" in sent
+
+
+def test_fix_file_verify_item_includes_path(tmp_path, monkeypatch):
+    """fix_file 独立校验也带上相对路径。"""
+    sub = tmp_path / "src" / "华语" / "周杰伦"
+    sub.mkdir(parents=True)
+    p = sub / "夜曲.mp3"
+    _make_tagged_mp3(p, "夜曲", "周杰伦")
+    seen = {}
+
+    def fake_verify(items, config, **kw):
+        seen["items"] = items
+        return [{"title": it["title"], "artist": it["artist"], "album": "",
+                 "genre": "", "year": "", "track": "",
+                 "confidence": 0.9, "note": ""} for it in items]
+
+    monkeypatch.setattr("mp3organizer.llm_tagger.verify_tags", fake_verify)
+    fix_file(p, llm_verify=True, llm_config=CFG,
+             backup_root=tmp_path / "src")
+    assert seen["items"][0]["path"] == "华语/周杰伦/夜曲.mp3"
+>>>>>>> Stashed changes

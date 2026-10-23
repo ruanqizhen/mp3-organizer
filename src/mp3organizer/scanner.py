@@ -51,3 +51,15 @@ def read_info(path: str | Path) -> dict:
     info["genre"] = _first_text(audio, "TCON")
     info["year"] = _first_text(audio, "TDRC") or _first_text(audio, "TYER")
     return info
+
+
+def display_relpath(path: str | Path, root: str | Path | None) -> str:
+    """相对路径（POSIX 风格，供大模型参考）；算不出时退回"父目录/文件名"。"""
+    p = Path(path)
+    if root:
+        try:
+            return p.relative_to(Path(root)).as_posix()
+        except ValueError:
+            pass
+    parent = p.parent.name
+    return f"{parent}/{p.name}" if parent else p.name

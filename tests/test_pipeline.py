@@ -368,3 +368,31 @@ def test_pipeline_llm_prebatch_reports_progress(tmp_path, monkeypatch):
     assert llm_events, "预批量应上报 llm_verify 进度"
     assert llm_events[0][3] == "a.mp3"  # 第一批的第一首
     assert llm_events[-1][1:3] == (2, 3)
+
+
+def test_pipeline_prebatch_sends_path(tmp_path, monkeypatch):
+    """预批量校验把相对路径发给大模型。"""
+    from mutagen.id3 import ID3, TIT2, TPE1, Encoding
+    from mp3organizer.llm_tagger import LLMConfig
+    src = tmp_path / "src"
+    sub = src / "待整理" / "周杰伦"
+    sub.mkdir(parents=True)
+    p = sub / "夜曲.mp3"
+    tag = ID3()
+    tag.add(TIT2(encoding=Encoding.UTF8, text=["夜曲"]))
+    tag.add(TPE1(encoding=Encoding.UTF8, text=["周杰伦"]))
+    tag.save(str(p))
+    seen = {}
+
+    def fake_verify(items, config, **kw):
+        seen["items"] = items
+        return [{"title": "夜曲", "artist": "周杰伦", "album": "",
+                 "genre": "", "year": "", "track": "",
+                 "confidence": 0.9, "note": ""}]
+
+    monkeypatch.setattr("mp3organizer.llm_tagger.verify_tags", fake_verify)
+    cfg = LLMConfig(base_url="http://x", api_key="k", model="m")
+    run_pipeline(src, tmp_path / "lib", llm_config=cfg, llm_verify=True,
+                 do_organize=False, do_cover=False,
+                 mp3val_exe=None, ffmpeg_exe=None)
+    assert seen["items"][0]["path"] == "待整理/周杰伦/夜曲.mp3"

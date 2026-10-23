@@ -12,7 +12,7 @@ import re
 import shutil
 from pathlib import Path
 
-from .categories import PENDING_CATEGORY
+from .categories import PENDING_CATEGORY, normalize_artist
 
 UNKNOWN_GENRE = "未知类型"
 UNKNOWN_ARTIST = "未知演唱者"
@@ -195,6 +195,25 @@ def target_path(library: str | Path, info: dict) -> Path:
     return library / genre / artist / f"{title}{ext}"
 
 
+def find_artist_dir(library: str | Path, category: str, artist: str) -> str | None:
+    """在分类目录下找归一化相等（繁简/大小写/尾点不敏感）的已有演唱者目录。
+
+    找到返回目录原名（调用方直接采用，不改名）；没有返回 None。
+    """
+    key = normalize_artist(artist)
+    if not key:
+        return None
+    base = Path(library) / sanitize(category)
+    try:
+        entries = sorted(p for p in base.iterdir() if p.is_dir())
+    except OSError:
+        return None
+    for sub in entries:
+        if normalize_artist(sub.name) == key:
+            return sub.name
+    return None
+
+
 def use_artist_subdir(library: str | Path, category: str, artist: str,
                       count: int, threshold: int) -> bool:
     """个人模板：同批同演唱者达到阈值，或目标下已有该演唱者目录 → 用子目录。"""
@@ -203,7 +222,7 @@ def use_artist_subdir(library: str | Path, category: str, artist: str,
         return False
     if count >= threshold:
         return True
-    return (Path(library) / sanitize(category) / sanitize(artist)).is_dir()
+    return find_artist_dir(library, category, artist) is not None
 
 
 def target_path_personal(library: str | Path, info: dict,
@@ -223,8 +242,17 @@ def target_path_personal(library: str | Path, info: dict,
     ext = Path(info.get("path", "")).suffix or ".mp3"
     filename = f"{artist} - {title}{ext}" if artist else f"{title}{ext}"
     if use_subdir and artist:
-        return library / category / artist / filename
+        subdir = find_artist_dir(library, category, raw_artist) or artist
+        return library / category / subdir / filename
     return library / category / filename
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    """两条路径是否指向同一文件（自归类时原地不动）。"""
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return False
 
 
 def organize_file(
@@ -247,6 +275,10 @@ def organize_file(
     else:
         category = category or PENDING_CATEGORY
         dest = target_path_personal(library, info, category, use_subdir)
+    if _same_file(src, dest):
+        return {"src": str(src), "dest": str(dest),
+                "status": "dry_run" if dry_run else "already_placed",
+                "category": category}
     if dest.exists():
         stem, suffix = dest.stem, dest.suffix
         i = 1
@@ -319,8 +351,12 @@ def merge_file(
     else:
         category = category or PENDING_CATEGORY
         dest = target_path_personal(library, info, category, use_subdir)
+    if _same_file(src, dest):
+        return {"src": str(src), "dest": str(dest),
+                "status": "dry_run" if dry_run else "already_placed",
+                "action": "already_placed", "category": category}
     if dest.exists():
-        if on_duplicate == "skip" and _is_duplicate(src, dest):
+        if _is_duplicate(src, dest):
             action = "skipped_duplicate"
         elif on_duplicate == "replace":
             action = "replaced"

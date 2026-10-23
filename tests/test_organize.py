@@ -334,3 +334,41 @@ def test_clean_display_name_comma_separator():
     from mp3organizer.organize import clean_display_name
     assert clean_display_name("张学友 _ 汤宝如", is_artist=True) == "张学友, 汤宝如"
     assert clean_display_name("张学友/汤宝如", is_artist=True) == "张学友/汤宝如"  # 无空格斜杠不动
+
+
+def test_find_artist_dir_adopts_existing_surface(tmp_path):
+    from mp3organizer.organize import find_artist_dir, target_path_personal
+    lib = tmp_path / "lib"
+    (lib / "华语.女" / "鄧紫棋").mkdir(parents=True)
+    assert find_artist_dir(lib, "华语.女", "邓紫棋") == "鄧紫棋"
+    assert find_artist_dir(lib, "华语.女", "王菲") is None
+    assert find_artist_dir(lib, "华语.女", "") is None
+    info = {"path": "/m/x.mp3", "title": "泡沫", "artist": "邓紫棋"}
+    got = target_path_personal(lib, info, "华语.女", True)
+    assert got == lib / "华语.女" / "鄧紫棋" / "邓紫棋 - 泡沫.mp3"
+
+
+def test_organize_file_skips_same_path(tmp_path):
+    from mp3organizer.organize import organize_file
+    lib = tmp_path / "lib"
+    dest = lib / "华语.女" / "鄧紫棋" / "邓紫棋 - 泡沫.mp3"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b"fake")
+    info = {"path": str(dest), "title": "泡沫", "artist": "邓紫棋"}
+    r = organize_file(dest, lib, info, category="华语.女", use_subdir=True)
+    assert r["status"] == "already_placed"
+    assert r["dest"] == str(dest)
+    assert dest.exists()
+
+
+def test_merge_file_replace_self_is_safe(tmp_path):
+    from mp3organizer.organize import merge_file
+    lib = tmp_path / "lib"
+    dest = lib / "华语.女" / "王菲 - 红豆.mp3"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b"fake")
+    info = {"path": str(dest), "title": "红豆", "artist": "王菲"}
+    r = merge_file(dest, lib, info, on_duplicate="replace",
+                   category="华语.女", use_subdir=False)
+    assert r["status"] == "already_placed"
+    assert dest.exists()  # replace 自合并不能删文件

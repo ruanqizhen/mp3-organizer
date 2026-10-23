@@ -81,6 +81,7 @@ def _prebatch_verify(
     files: list[Path],
     repaired_infos: dict[str, dict],
     *,
+    root: str | Path | None = None,
     llm_config,
     llm_cache_dir: str | Path | None,
     progress=None,
@@ -88,8 +89,8 @@ def _prebatch_verify(
 ) -> tuple[dict[str, dict], dict[str, dict], str]:
     """预批量大模型标签校对。
 
-    repaired_infos[path] 为试运行编码修复后的内存标签；把文件名+修复后
-    标签一次性发给大模型校对。返回 (verify_map, final_infos, error)：
+    repaired_infos[path] 为试运行编码修复后的内存标签；把路径+文件名+
+    修复后标签一次性发给大模型校对。返回 (verify_map, final_infos, error)：
     verify_map[path] 为校对结果（失败时为 {}，主循环不再重试）；
     final_infos[path] 为叠加校对结果后的内存标签（供归类计数用）；
     error 非空表示整批请求失败。
@@ -97,13 +98,16 @@ def _prebatch_verify(
     """
     from .llm_tagger import verify_tags
     from .encoding import fix_text
+    from .scanner import display_relpath
 
     items: list[dict] = []
     for p in files:
         info = repaired_infos[str(p)]
         # 文件名本身可能乱码，先修再送大模型
         display_name, _ = fix_text(p.name)
-        items.append({"filename": display_name, **{
+        rel = display_relpath(p, root)
+        fixed_rel = "/".join(fix_text(seg)[0] for seg in rel.split("/"))
+        items.append({"path": fixed_rel, "filename": display_name, **{
             k: (info.get(k) or "") for k in _VERIFY_FIELDS[1:]}})
     try:
         results = verify_tags(items, llm_config, cache_dir=llm_cache_dir,
@@ -245,7 +249,7 @@ def run_pipeline(
             _p(done, total_b, "llm_verify", label)
         vstats: dict = {}
         verify_map, final_infos, err = _prebatch_verify(
-            files, repaired_infos,
+            files, repaired_infos, root=root,
             llm_config=llm_config, llm_cache_dir=cache_opt,
             progress=_vp, stats=vstats)
         if err:
@@ -372,7 +376,7 @@ def run_pipeline(
             rec["organize_status"] = org["status"]
             rec["organize_action"] = org.get("action", org["status"])
             rec["category"] = org.get("category", "")
-            if not dry_run and org["status"] == "moved":
+            if not dry_run and org["status"] in ("moved", "renamed", "replaced"):
                 target = Path(org["dest"])
                 _remove_empty_dirs_up_to(p, root)
         else:

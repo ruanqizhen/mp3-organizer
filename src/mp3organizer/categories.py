@@ -12,6 +12,7 @@ from collections import Counter
 from pathlib import Path
 
 from .scanner import find_mp3_files
+from .textnorm import has_cjk, has_other_script, to_simplified
 
 CANONICAL_CATEGORIES: tuple[str, ...] = (
     "华语.女",
@@ -26,8 +27,9 @@ PENDING_CATEGORY = "待分类"
 
 
 def normalize_artist(name: str | None) -> str:
-    """归一化演唱者名用于查表：压空格、去尾点、不分大小写。"""
-    return " ".join((name or "").split()).rstrip(".").casefold()
+    """归一化演唱者名用于查表：压空格、去尾点、繁转简、不分大小写。"""
+    collapsed = " ".join((name or "").split()).rstrip(".")
+    return to_simplified(collapsed).casefold()
 
 
 def learn_from_library(library: str | Path) -> dict[str, str]:
@@ -64,36 +66,6 @@ def learn_from_library(library: str | Path) -> dict[str, str]:
             for artist, counter in votes.items()}
 
 
-def _has_cjk(text: str) -> bool:
-    """是否包含汉字（CJK 统一表意文字及扩展，不含假名/谚文）。"""
-    for ch in text:
-        o = ord(ch)
-        if (
-            0x4E00 <= o <= 0x9FFF
-            or 0x3400 <= o <= 0x4DBF
-            or 0xF900 <= o <= 0xFAFF
-        ):
-            return True
-    return False
-
-
-def _has_other_script(text: str) -> bool:
-    """是否包含假名/谚文/西里尔/泰文/阿拉伯文/天城文等非拉丁非汉字字母。"""
-    for ch in text:
-        o = ord(ch)
-        if (
-            0x3040 <= o <= 0x30FF  # 平假名/片假名
-            or 0xAC00 <= o <= 0xD7AF  # 谚文音节
-            or 0x1100 <= o <= 0x11FF  # 谚文素
-            or 0x0400 <= o <= 0x04FF  # 西里尔
-            or 0x0E00 <= o <= 0x0E7F  # 泰文
-            or 0x0600 <= o <= 0x06FF  # 阿拉伯文
-            or 0x0900 <= o <= 0x097F  # 天城文
-        ):
-            return True
-    return False
-
-
 def _is_latin_text(text: str) -> bool:
     """至少含一个字母，且所有字母都在拉丁区（U+2500 以下）。"""
     letters = [c for c in text if c.isalpha()]
@@ -115,10 +87,10 @@ def guess_by_rules(artist: str, title: str = "", genre: str = "") -> str | None:
     if g and any(k in g for k in PURE_MUSIC_KEYWORDS):
         return "纯音乐"
     a = artist or ""
-    if ("," in a or "，" in a or "、" in a) and _has_cjk(a):
+    if ("," in a or "，" in a or "、" in a) and has_cjk(a):
         return "华语.双人"
     combined = f"{a} {title or ''}"
-    if _has_other_script(combined):
+    if has_other_script(combined):
         return "其它语言"
     if _is_latin_text(combined):
         return "英语"
