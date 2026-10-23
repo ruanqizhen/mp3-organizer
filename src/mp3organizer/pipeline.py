@@ -28,6 +28,7 @@ from .report import build_html, build_csv
 PHASE_NAMES = {
     "scan": "扫描",
     "llm_verify": "大模型校对标签",
+    "mb_verify": "MusicBrainz 交叉验证",
     "llm_classify": "大模型归类分类",
     "tags": "修复标签",
     "integrity": "完整性检查",
@@ -86,12 +87,18 @@ def _prebatch_verify(
     llm_cache_dir: str | Path | None,
     progress=None,
     stats: dict | None = None,
-) -> tuple[dict[str, dict], dict[str, dict], str]:
-    """预批量大模型标签校对。
+    mb_verify: bool = True,
+    mb_min_score: float = 0.85,
+    mb_progress=None,
+) -> tuple[dict[str, dict], dict[str, dict | None], dict[str, dict], str]:
+    """预批量大模型标签校对 + MusicBrainz 交叉验证。
 
     repaired_infos[path] 为试运行编码修复后的内存标签；把路径+文件名+
-    修复后标签一次性发给大模型校对。返回 (verify_map, final_infos, error)：
+    修复后标签一次性发给大模型校对；校对出的 title/artist 再批量去 MB
+    查 recording，高分命中进 mb_map（主循环不再请求 MB）。
+    返回 (verify_map, mb_map, final_infos, error)：
     verify_map[path] 为校对结果（失败时为 {}，主循环不再重试）；
+    mb_map[path] 为 MB 高分命中（无命中/失败/关闭时为 None）；
     final_infos[path] 为叠加校对结果后的内存标签（供归类计数用）；
     error 非空表示整批请求失败。
     progress(done, total, label)：每批请求前回调，label 为本批第一首歌。
@@ -118,6 +125,15 @@ def _prebatch_verify(
         error = "%s: %s" % (type(exc).__name__, exc)
     verify_map: dict[str, dict] = {}
     final_infos: dict[str, dict] = {}
+    mb_map: dict[str, dict | None] = {}
+    if mb_verify:
+        from .musicbrainz import cross_check
+        try:
+            mb_results = cross_check(
+                results, min_score=mb_min_score, progress=mb_progress)
+        except Exception:  # noqa: BLE001 - MB 整批失败不阻断
+            mb_results = [None] * len(results)
+        mb_map = {str(p): mb for p, mb in zip(files, mb_results)}
     for p, r in zip(files, results):
         verify_map[str(p)] = r
         info = dict(repaired_infos[str(p)])
@@ -127,7 +143,7 @@ def _prebatch_verify(
                 if v:
                     info[k] = v
         final_infos[str(p)] = info
-    return verify_map, final_infos, error
+    return verify_map, mb_map, final_infos, error
 
 
 def _prebatch_classify(
@@ -197,6 +213,8 @@ def run_pipeline(
     llm_config=None,
     llm_cache_dir: str | Path | None = None,
     llm_verify: bool = False,
+    mb_verify: bool = True,
+    mb_min_score: float = 0.85,
     template: str = TEMPLATE_PERSONAL,
     subdir_threshold: int = 3,
     merge_mode: bool = False,
@@ -247,15 +265,21 @@ def run_pipeline(
 
     # 预批量 1：大模型标签校对（一次查完，主循环不再请求）
     verify_map: dict[str, dict] = {}
+    mb_map: dict[str, dict | None] = {}
     final_infos: dict[str, dict] = repaired_infos
     if do_tags and verify_enabled:
         def _vp(done: int, total_b: int, label: str) -> None:
             _p(done, total_b, "llm_verify", label)
+
+        def _mp(done: int, total_m: int, label: str) -> None:
+            _p(done, total_m, "mb_verify", label)
         vstats: dict = {}
-        verify_map, final_infos, err = _prebatch_verify(
+        verify_map, mb_map, final_infos, err = _prebatch_verify(
             files, repaired_infos, root=root,
             llm_config=llm_config, llm_cache_dir=cache_opt,
-            progress=_vp, stats=vstats)
+            progress=_vp, stats=vstats,
+            mb_verify=mb_verify and verify_enabled,
+            mb_min_score=mb_min_score, mb_progress=_mp)
         if err:
             _p(0, total, "llm_verify", f"批量校对失败，已回退：{err}")
         elif vstats:
@@ -317,6 +341,9 @@ def run_pipeline(
                 llm_config=llm_config, llm_cache_dir=cache_opt,
                 llm_verify=llm_verify,
                 llm_verify_result=verify_map.get(str(p)),
+                mb_verify=mb_verify,
+                mb_verify_result=mb_map.get(str(p)),
+                mb_min_score=mb_min_score,
             )
             rec["tag_status"] = tag["status"]
             rec["tag_changes"] = tag["changes"]

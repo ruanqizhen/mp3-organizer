@@ -26,6 +26,8 @@ def _fmt_changes(changes: list[dict]) -> str:
             mark = "（大模型校对）"
         elif enc == "t2s":
             mark = "（繁转简）"
+        elif enc == "musicbrainz":
+            mark = "（MB 交叉验证·匹配分%s）" % c.get("score", "")
         elif enc == "filename":
             mark = "（文件名猜测）"
         else:

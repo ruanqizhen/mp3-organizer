@@ -284,6 +284,45 @@ def _simplify_frames(audio: ID3, result: dict) -> None:
             frame.encoding = Encoding.UTF8
 
 
+def _apply_mb(audio: ID3, mb: dict | None) -> list[dict]:
+    """MusicBrainz 高分命中的标准值写入 audio。
+
+    title/artist：MB 标准写法覆盖（与现有不同才写）；
+    album/year：只补空，不覆盖已有值（MB 的发行版本未必是用户手上这一版）。
+    返回 changes 记录，每条带 mbid 与 score，供报告标注来源。
+    """
+    if not mb:
+        return []
+    changes = []
+    cls_map = {"TIT2": TIT2, "TPE1": TPE1, "TALB": TALB, "TDRC": TDRC}
+    # 覆盖式：标题/演唱者用 MB 标准写法
+    for frame_id, key in (("TIT2", "title"), ("TPE1", "artist")):
+        new_value = (mb.get(key) or "").strip()
+        if not new_value:
+            continue
+        current = _frame_text(audio, frame_id)
+        if current == new_value:
+            continue
+        if frame_id in audio:
+            del audio[frame_id]
+        audio.add(cls_map[frame_id](encoding=Encoding.UTF8, text=[new_value]))
+        changes.append({"frame": frame_id, "old": current, "new": new_value,
+                        "encoding": "musicbrainz", "mbid": mb.get("mbid", ""),
+                        "score": mb.get("score")})
+    # 只补空：专辑/年份
+    for frame_id, key in (("TALB", "album"), ("TDRC", "year")):
+        new_value = (mb.get(key) or "").strip()
+        if not new_value:
+            continue
+        if _frame_text(audio, frame_id):
+            continue
+        audio.add(cls_map[frame_id](encoding=Encoding.UTF8, text=[new_value]))
+        changes.append({"frame": frame_id, "old": "", "new": new_value,
+                        "encoding": "musicbrainz", "mbid": mb.get("mbid", ""),
+                        "score": mb.get("score")})
+    return changes
+
+
 def fix_file(
     path: str | Path,
     *,
@@ -299,6 +338,10 @@ def fix_file(
     llm_verify: bool = False,
     llm_verify_result: dict | None = None,
     _verify_fn=None,
+    mb_verify: bool = True,
+    mb_verify_result: dict | None = None,
+    mb_min_score: float = 0.85,
+    _mb_fn=None,
 ) -> dict:
     """修复单个 MP3 的标签编码。
 
@@ -398,6 +441,24 @@ def fix_file(
             if vchanges:
                 result["changes"].extend(vchanges)
                 verify_applied = True
+            # MusicBrainz 交叉验证：LLM 校对出的 title/artist 去权威库查，
+            # 高分命中用标准值覆盖/补空（mb_verify_result 为预批量结果，
+            # 避免重复请求；_mb_fn 供测试注入）
+            if mb_verify and (verified.get("title") or verified.get("artist")):
+                mb = mb_verify_result
+                if mb is None:
+                    try:
+                        from .musicbrainz import lookup_recording
+                        fn = _mb_fn or lookup_recording
+                        mb = fn(verified.get("artist") or "",
+                                verified.get("title") or "",
+                                min_score=mb_min_score)
+                    except Exception:  # noqa: BLE001 - MB 失败不阻断
+                        mb = None
+                mchanges = _apply_mb(audio, mb)
+                if mchanges:
+                    result["changes"].extend(mchanges)
+                    verify_applied = True
 
     if not verify_applied and not result["changes"] and guess_from_filename:
         # 标签存在但标题/演唱者等为空，从文件名补齐（不覆盖已有值）
