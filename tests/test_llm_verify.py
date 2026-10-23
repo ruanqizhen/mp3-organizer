@@ -303,3 +303,22 @@ def test_fix_file_verify_item_includes_path(tmp_path, monkeypatch):
     fix_file(p, llm_verify=True, llm_config=CFG,
              backup_root=tmp_path / "src")
     assert seen["items"][0]["path"] == "华语/周杰伦/夜曲.mp3"
+
+
+def test_verify_prompt_covers_messy_video_filenames():
+    """回归：VERIFY prompt 包含长视频文件名的规则与示例（官方频道/#话题/栏目名）。"""
+    from mp3organizer.llm_tagger import VERIFY_SYSTEM_PROMPT as p
+    assert "官方频道" in p and "Official Channel" in p
+    assert "#朋友狠狠地破防了" in p  # 示例7：话题里藏歌名
+    assert "岁乐纯享" in p  # 示例7：【】栏目名非歌名
+    assert "相信音樂BinMusic" in p  # 示例8：唱片公司频道
+    assert "蘇打綠 sodagreen - 蘇打綠 sodagreen" in p  # 示例9：演唱者去重
+    assert "「小時代」電影主題曲" in p  # 示例9：主题曲归专辑
+
+
+def test_rename_prompt_covers_messy_video_filenames():
+    """回归：RENAME prompt 包含长视频文件名的规则与示例。"""
+    from mp3organizer.llm_tagger import RENAME_SYSTEM_PROMPT as p
+    assert "官方频道" in p
+    assert "#朋友狠狠地破防了" in p
+    assert "相信音樂BinMusic" in p
