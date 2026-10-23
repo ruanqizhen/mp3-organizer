@@ -224,7 +224,6 @@ def test_classify_artists_progress_shows_artist(tmp_path):
     assert seen == [(0, 3, "周杰伦"), (2, 3, "Adele")]
 
 
-<<<<<<< Updated upstream
 def test_query_cached_stats_reports_cache_hits(tmp_path):
     """stats 报出总数/缓存命中/实际调用数。"""
     from mp3organizer.llm_tagger import _query_cached, SYSTEM_PROMPT
@@ -246,22 +245,30 @@ def test_query_cached_stats_reports_cache_hits(tmp_path):
     assert len(calls) == 1
 
 
-def test_query_cached_no_cache_always_calls(tmp_path):
-    """use_cache=False 时不读也不写缓存，每次都调大模型。"""
+def test_query_cached_no_cache_session_dedup(tmp_path):
+    """use_cache=False：不读不写持久缓存，但当次运行内去重；
+    clear_session_cache() 后重新调用。"""
     from pathlib import Path
-    from mp3organizer.llm_tagger import _query_cached, SYSTEM_PROMPT
+    from mp3organizer.llm_tagger import (
+        _query_cached, SYSTEM_PROMPT, clear_session_cache)
     items = [{"title": "t0", "artist": "a", "album": "",
               "genre": "", "year": "", "confidence": 0.9}]
     fake_post, calls = _fake_post(json.dumps(items))
     cfg = LLMConfig(base_url="https://fake.local", api_key="k", model="m",
                     batch_size=10, use_cache=False)
+    clear_session_cache()
     _query_cached(["f0"], cfg, SYSTEM_PROMPT, "nc.json", cache_dir=tmp_path,
                   request_fn=fake_post)
     _query_cached(["f0"], cfg, SYSTEM_PROMPT, "nc.json", cache_dir=tmp_path,
                   request_fn=fake_post)
-    assert len(calls) == 2  # 两次都实际调用
+    assert len(calls) == 1  # 当次运行内命中内存缓存
     assert not (Path(tmp_path) / "nc.json").exists()  # 没写缓存文件
-=======
+    clear_session_cache()  # 新的一次运行：重新调用
+    _query_cached(["f0"], cfg, SYSTEM_PROMPT, "nc.json", cache_dir=tmp_path,
+                  request_fn=fake_post)
+    assert len(calls) == 2
+
+
 def test_verify_tags_sends_path(tmp_path):
     """校验请求带上相对路径。"""
     from mp3organizer.llm_tagger import verify_tags
@@ -296,4 +303,3 @@ def test_fix_file_verify_item_includes_path(tmp_path, monkeypatch):
     fix_file(p, llm_verify=True, llm_config=CFG,
              backup_root=tmp_path / "src")
     assert seen["items"][0]["path"] == "华语/周杰伦/夜曲.mp3"
->>>>>>> Stashed changes
