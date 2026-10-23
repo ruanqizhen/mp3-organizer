@@ -186,3 +186,41 @@ def test_fix_file_mb_disabled(tmp_path, monkeypatch):
                  _mb_fn=lambda a, t, **kw: calls.append((a, t)))
     assert calls == []
     assert r["status"] in ("verified", "unchanged")
+
+
+# ---------- tag→文件名因果链 ----------
+def test_messy_filename_becomes_clean_via_tags(tmp_path, monkeypatch):
+    """用户指出的因果链：文件名脏是因为 tag 没洗好。
+    脏文件名 + 空 tag → LLM 校对（mock 按新 prompt 期望返回）→
+    organize 出来的文件名自然干净。"""
+    from mutagen.id3 import ID3
+    from mp3organizer.encoding import fix_file
+    from mp3organizer.organize import organize_file, TEMPLATE_CLASSIC
+    from mp3organizer.scanner import read_info
+
+    messy = ("湖南卫视芒果TV官方频道 China HunanTV Official Channel - "
+             "【岁乐纯享】时光家族#朋友狠狠地破防了！时光家族献唱集体哭成泪人"
+             "#时光音乐会Time Concert EP13丨MangoTV.mp3")
+    p = tmp_path / "src" / messy
+    p.parent.mkdir(parents=True)
+    _make_tagged_mp3(p, "", "")  # 空 tag：文件名是唯一信息源
+
+    # mock LLM 按新 prompt 示例7的期望输出返回
+    verified = {"title": "朋友", "artist": "时光家族", "album": "时光音乐会",
+                "genre": "流行", "year": "", "track": "",
+                "confidence": 0.8, "note": ""}
+    monkeypatch.setattr("mp3organizer.llm_tagger.verify_tags",
+                        lambda items, config, **kw: [verified])
+
+    from mp3organizer.llm_tagger import LLMConfig
+    cfg = LLMConfig(base_url="https://fake.local", api_key="k", model="m")
+    r = fix_file(p, llm_verify=True, llm_config=cfg, mb_verify=False)
+    assert r["status"] == "verified"
+    assert ID3(str(p))["TIT2"].text[0] == "朋友"
+
+    info = read_info(p)
+    lib = tmp_path / "lib"
+    dest = organize_file(p, lib, info, dry_run=True,
+                         template=TEMPLATE_CLASSIC)["dest"]
+    from pathlib import Path as _P
+    assert _P(dest).name == "朋友.mp3", dest  # 不再是 100+ 字符的脏名
