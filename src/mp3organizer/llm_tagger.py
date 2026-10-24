@@ -76,6 +76,17 @@ def _cache_path(cache_dir: str | Path | None, cache_name: str) -> Path:
     return Path(cache_dir) / cache_name
 
 
+# 当次运行内的内存缓存：use_cache=False 时用它做去重（同一艺人/同一项
+# 在一次运行里只查一次），不落盘。run_pipeline 开始时清空，保证"每一次
+# 运行"都是干净的（GUI 常驻进程多次点开始也不串）。
+_session_cache: dict[tuple[str, str], dict] = {}
+
+
+def clear_session_cache() -> None:
+    """清空当次运行的内存缓存。"""
+    _session_cache.clear()
+
+
 def _load_cache(cache_dir: str | Path | None, cache_name: str) -> dict:
     try:
         return json.loads(_cache_path(cache_dir, cache_name).read_text(encoding="utf-8"))
@@ -174,9 +185,20 @@ def _query_cached(
     """
     if not config.is_configured():
         raise LLMError("大模型未配置：需要 API 地址和模型名")
-    # use_cache=False 时不读也不写缓存，每次都重新调用
-    cache = _load_cache(cache_dir, cache_name) if config.use_cache else {}
-    todo = [f for f in filenames if f not in cache]
+    # use_cache=False：不用以前存的持久缓存，但当次运行内的结果
+    # 进内存会话缓存去重（不落盘）
+    if config.use_cache:
+        cache = _load_cache(cache_dir, cache_name)
+        todo = [f for f in filenames if f not in cache]
+    else:
+        cache = {}
+        todo = []
+        for f in filenames:
+            hit = _session_cache.get((cache_name, f))
+            if hit is not None:
+                cache[f] = hit
+            else:
+                todo.append(f)
     if stats is not None:
         stats.update(total=len(filenames),
                      cached=len(filenames) - len(todo),
@@ -191,6 +213,8 @@ def _query_cached(
         results = _query_batch(batch, config, system_prompt, request_fn)
         for name, item in zip(batch, results):
             cache[name] = item
+            if not config.use_cache:
+                _session_cache[(cache_name, name)] = item
         if config.use_cache:
             _save_cache(cache_dir, cache_name, cache)
     return [cache.get(f, {}) for f in filenames]
@@ -285,7 +309,16 @@ def classify_artists(
         raise LLMError("大模型未配置：需要 API 地址和模型名")
     keys = [normalize_artist(a) or ("title:" + t.strip().casefold())
             for a, t in pairs]
-    cache = _load_cache(cache_dir, "llm_classify.json") if config.use_cache else {}
+    # use_cache=False：不用以前存的持久缓存，但当次运行内的结果
+    # 进内存会话缓存去重（不落盘）
+    if config.use_cache:
+        cache = _load_cache(cache_dir, "llm_classify.json")
+    else:
+        cache = {}
+        for k in set(keys):
+            hit = _session_cache.get(("llm_classify.json", k))
+            if hit is not None:
+                cache[k] = hit
     seen = set(cache)
     todo = []
     for i, k in enumerate(keys):
@@ -307,6 +340,8 @@ def classify_artists(
         results = _query_batch(batch, config, CLASSIFY_SYSTEM_PROMPT, request_fn)
         for i, item in zip(batch_idx, results):
             cache[keys[i]] = item
+            if not config.use_cache:
+                _session_cache[("llm_classify.json", keys[i])] = item
         if config.use_cache:
             _save_cache(cache_dir, "llm_classify.json", cache)
     return [cache.get(k, {}) for k in keys]

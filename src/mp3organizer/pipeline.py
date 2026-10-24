@@ -217,6 +217,10 @@ def run_pipeline(
     """
     if do_organize and not library:
         raise ValueError("启用归类整理时必须指定 library（音乐库目录）")
+    # 每次运行清空内存会话缓存：当次运行内的 LLM 结果可复用，
+    # 但不沿用上一次运行的（use_cache=False 时持久缓存本来也不读）
+    from .llm_tagger import clear_session_cache
+    clear_session_cache()
 
     def _p(i: int, total: int, phase: str, message: str = "") -> None:
         if progress is not None:
