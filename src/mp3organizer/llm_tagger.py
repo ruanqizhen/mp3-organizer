@@ -246,10 +246,16 @@ RENAME_SYSTEM_PROMPT = """你是文件名整理助手。用户会给你一批 MP
 3. 发挥你的中文流行音乐知识：拼音缩写、错别字、顺序颠倒都要尽力还原。
 4. 实在看不出的文件名：title 填去掉噪音后最像曲名的部分，artist 填空字符串，confidence 填 0.1，不要编造演唱者。
 5. 所有中文输出一律用简体中文。
+6. "X官方频道"/"X Official Channel"、唱片公司频道名（如相信音樂BinMusic）是上传者不是演唱者，视为噪音；"蘇打綠 sodagreen - 蘇打綠 sodagreen"这种前后重复的去重为一人；中英混写以中文名为准。
+7. #话题标签里可能藏着歌名（如"#朋友狠狠地破防了"→《朋友》），去掉评论性文字提取；【】里也可能是栏目名（如【岁乐纯享】）而非歌名，结合上下文判断。
 
 示例：
 输入：["[320K]周杰伦-夜曲(官方正式版)_www.xiami.com免费下载.mp3", "03. 王菲 - 红豆 (Live现场版).mp3", "Classic Oldies 666 - 乌兰巴托的夜 洋澜一.mp3"]
 输出：[{"artist": "周杰伦", "title": "夜曲", "confidence": 0.95}, {"artist": "王菲", "title": "红豆", "confidence": 0.9}, {"artist": "洋澜一", "title": "乌兰巴托的夜", "confidence": 0.85}]
+
+示例 2（视频站下载的长文件名）：
+输入：["湖南卫视芒果TV官方频道 China HunanTV Official Channel - 【岁乐纯享】时光家族#朋友狠狠地破防了！时光家族献唱集体哭成泪人#时光音乐会Time Concert EP13丨MangoTV.mp3", "相信音樂BinMusic - MAYDAY五月天 feat.孫燕姿 [ 溫柔 TENDERNESS ] Official Live Video.mp3", "蘇打綠 sodagreen - 蘇打綠 sodagreen - 【我好想你】「小時代」電影主題曲MV.mp3"]
+输出：[{"artist": "时光家族", "title": "朋友", "confidence": 0.8}, {"artist": "五月天, 孙燕姿", "title": "温柔", "confidence": 0.9}, {"artist": "苏打绿", "title": "我好想你", "confidence": 0.9}]
 """
 
 
@@ -354,13 +360,14 @@ VERIFY_SYSTEM_PROMPT = """你是中文音乐标签校对助手。用户会给你
 要求：
 1. 只返回 JSON 数组，与输入顺序一一对应，不要输出其他任何内容。
 2. 每项包含字段：title（纯歌名，不含演唱者/专辑/Feat/年份等杂质）、artist（演唱者标准名，多人用", "连接，如"张学友, 汤宝如"）、album（专辑，未知填空字符串）、genre（流派，如 流行/摇滚/民谣/古典/爵士/电子/说唱/乡村/轻音乐，未知填空字符串）、year（4 位年份，未知填空字符串）、track（音轨号，未知填空字符串）、confidence（0~1）、note（中文，一句话说明你改了什么；没改填空字符串）。
-3. 演唱者统一用其最广为人知的中文简体全名：Jay Chou→周杰伦，Namewee→黄明志，GEM/GEMblog/GEM鄧紫棋/鄧紫棋→邓紫棋，JJ Lin→林俊杰；拼写变体/昵称/账号名一律归并；中英文混写时以中文名为准；"周杰伦 Jay Chou"这类视为同一人；下划线连接的多个名字拆成多人（王宇宙Leto_喬浚丞→"王宇宙Leto, 乔浚丞"）。
+3. 演唱者统一用其最广为人知的中文简体全名：Jay Chou→周杰伦，Namewee→黄明志，GEM/GEMblog/GEM鄧紫棋/鄧紫棋→邓紫棋，JJ Lin→林俊杰；拼写变体/昵称/账号名一律归并；中英文混写时以中文名为准；"周杰伦 Jay Chou"这类视为同一人；"蘇打綠 sodagreen - 蘇打綠 sodagreen"这种前后重复（上传者前缀+真演唱者）的去重为一人；下划线连接的多个名字拆成多人（王宇宙Leto_喬浚丞→"王宇宙Leto, 乔浚丞"）。
 4. 标题里常混入的信息要拆出来：【】内的歌名/专辑名、Ft./feat./Featuring/合唱后面的是合作艺人（并入 artist）、末尾 —/–/by + 人名这类演唱者后缀（拆出并入 artist）、4 位年份、专辑名、"亚洲通吃"这类版本/企划名归入 album；括号里是副标题/备选名时取主标题（"若月亮沒來 (若是月亮還沒來)"取"若月亮沒來"）。
 5. 所有中文输出一律用简体中文（title/artist/album/genre 一律简体）。
-6. 去掉噪音：PLAY MUSIC 这类来源前缀、www.xxx.com 这类站点前缀、【动态歌词/lyric video】这类标记、with English/中英字幕这类标记、『』「」里的歌词引用、官方MV/OST 标记；演唱者栏是频道名/上传者名（如 XXX Music Channel、YOYOROCK 滾石移動）时视为噪音，从标题里找真正演唱者。
+6. 去掉噪音：PLAY MUSIC 这类来源前缀、www.xxx.com 这类站点前缀、【动态歌词/lyric video】这类标记、with English/中英字幕这类标记、『』「」里的歌词引用、官方MV/OST 标记；演唱者栏是频道名/上传者名（如 XXX Music Channel、YOYOROCK 滾石移動）时视为噪音，从标题里找真正演唱者；"X官方频道"/"X Official Channel"这类频道名前缀也是噪音。
 7. 《》书名号里中英混写时取中文（《不染 Unsullied》取"不染"）；【香蜜沉沉燼如霜主題曲】这类主题曲信息可归入 album。
 8. 拼音缩写、错别字、语序颠倒尽力还原（如 "yq_zjl"→夜曲/周杰伦）。
 9. 不要编造：实在判断不出，title 用去掉噪音后的文件名，artist/album/genre/year/track 填空字符串，confidence 不超过 0.3。
+10. #话题标签里可能藏着歌名：去掉评论性文字提取歌名（如"#朋友狠狠地破防了"→《朋友》）；节目名+期数（如"时光音乐会 EP13"）可归入 album；【】里也可能是栏目/系列名（如【岁乐纯享】）而非歌名，要结合上下文判断哪个才是真正的歌名。
 
 示例：
 输入：[{"path": "待整理/Namewee-胡志明的雨.mp3", "filename": "Namewee 黃明志【胡志明的雨】Ft. 越南小天王胡光孝 亞洲通吃 2017 All Eat Asia.mp3", "title": "Namewee 黃明志【胡志明的雨】Ft. 越南小天王胡光孝 亞洲通吃 2017 All Eat Asia", "artist": "Namewee", "album": "", "genre": "", "year": "", "track": ""}]
@@ -385,6 +392,18 @@ VERIFY_SYSTEM_PROMPT = """你是中文音乐标签校对助手。用户会给你
 示例 6（动态歌词水印 + 副标题 + —演唱者后缀 + 歌词引用）：
 输入：[{"path": "待整理/程响/世界这么大还是遇见你.mp3", "filename": "【動態歌詞】世界這麼大還是遇見你(清新的小女孩（中文版）)—程響『世界這麼大還是遇見你 多少次瘋狂多少天真』.mp3", "title": "【動態歌詞】世界這麼大還是遇見你(清新的小女孩（中文版）)—程響『世界這麼大還是遇見你 多少次瘋狂多少天真』", "artist": "", "album": "", "genre": "", "year": "", "track": ""}]
 输出：[{"title": "世界这么大还是遇见你", "artist": "程响", "album": "", "genre": "流行", "year": "", "track": "", "confidence": 0.85, "note": "去掉动态歌词标记/副标题/歌词引用；—后缀拆出演唱者；繁转简"}]
+
+示例 7（官方频道前缀 + 栏目名 + #话题里藏歌名 + 节目期数）：
+输入：[{"path": "待整理/时光音乐会.mp3", "filename": "湖南卫视芒果TV官方频道 China HunanTV Official Channel - 【岁乐纯享】时光家族#朋友狠狠地破防了！时光家族献唱集体哭成泪人#时光音乐会Time Concert EP13丨MangoTV.mp3", "title": "", "artist": "", "album": "", "genre": "", "year": "", "track": ""}]
+输出：[{"title": "朋友", "artist": "时光家族", "album": "时光音乐会", "genre": "流行", "year": "", "track": "", "confidence": 0.8, "note": "官方频道前缀是噪音；【岁乐纯享】是栏目名不是歌名；#话题里'朋友狠狠地破防了'藏着歌名《朋友》；节目名+期数归入专辑"}]
+
+示例 8（唱片公司频道前缀 + 中英艺人去重 + feat. + 方括号标题）：
+输入：[{"path": "待整理/五月天 - 温柔.mp3", "filename": "相信音樂BinMusic - MAYDAY五月天 feat.孫燕姿 [ 溫柔 TENDERNESS ] Official Live Video.mp3", "title": "", "artist": "", "album": "", "genre": "", "year": "", "track": ""}]
+输出：[{"title": "温柔", "artist": "五月天, 孙燕姿", "album": "", "genre": "流行", "year": "", "track": "", "confidence": 0.9, "note": "相信音樂BinMusic 是唱片公司频道不是演唱者；MAYDAY/五月天去重；feat. 拆出孙燕姿；方括号里中英取中文；Official Live Video 是噪音"}]
+
+示例 9（演唱者前后重复 + 【】歌名 + 「」电影主题曲归入专辑）：
+输入：[{"path": "待整理/苏打绿 - 我好想你.mp3", "filename": "蘇打綠 sodagreen - 蘇打綠 sodagreen - 【我好想你】「小時代」電影主題曲MV.mp3", "title": "", "artist": "", "album": "", "genre": "", "year": "", "track": ""}]
+输出：[{"title": "我好想你", "artist": "苏打绿", "album": "小时代", "genre": "流行", "year": "", "track": "", "confidence": 0.9, "note": "开头重复的演唱者是上传者前缀，去重；【】内是歌名；「小時代」電影主題曲归入专辑；MV 是噪音；繁转简"}]
 """
 
 
