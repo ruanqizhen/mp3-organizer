@@ -212,6 +212,9 @@ class App(tk.Tk):
         self._llm_no_cache = tk.BooleanVar(value=True)
         ttk.Checkbutton(frm, text="不使用大模型本地缓存（每次运行都重新调用）",
                         variable=self._llm_no_cache).pack(anchor="w", padx=8, pady=2)
+        self._mb_verify = tk.BooleanVar(value=True)
+        ttk.Checkbutton(frm, text="MusicBrainz 交叉验证（权威库复核标题/演唱者，补专辑/年份）",
+                        variable=self._mb_verify).pack(anchor="w", padx=8, pady=2)
         self._llm_fields: dict[str, tk.StringVar] = {}
         for key, label, default in (
                 ("base_url", "API 地址", "https://api.deepseek.com"),
@@ -250,12 +253,15 @@ class App(tk.Tk):
             self._llm_verify.set(bool(data["verify"]))
         if "no_cache" in data:
             self._llm_no_cache.set(bool(data["no_cache"]))
+        if "mb_verify" in data:
+            self._mb_verify.set(bool(data["mb_verify"]))
 
     def _save_llm_settings(self) -> None:
         import json
         data = {"enabled": self._llm_enabled.get(),
                 "verify": self._llm_verify.get(),
-                "no_cache": self._llm_no_cache.get()}
+                "no_cache": self._llm_no_cache.get(),
+                "mb_verify": self._mb_verify.get()}
         data.update({k: v.get().strip() for k, v in self._llm_fields.items()})
         p = self._llm_config_file()
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -363,6 +369,7 @@ class App(tk.Tk):
             guess_from_filename=self._vars["guess"].get(),
             llm_config=llm_config,
             llm_verify=self._llm_verify.get(),
+            mb_verify=self._mb_verify.get() and self._llm_verify.get(),
             merge_mode=self._vars["merge_mode"].get(),
             stop_event=self._stop_event,
             template=self._template.get(),

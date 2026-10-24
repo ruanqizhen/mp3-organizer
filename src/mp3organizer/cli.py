@@ -45,6 +45,13 @@ def _add_llm_args(p: argparse.ArgumentParser) -> None:
                    help="关闭大模型标签校对，只用大模型猜标签/定分类")
     p.add_argument("--no-llm-cache", action="store_true",
                    help="不使用大模型本地缓存，每次运行都重新调用")
+    p.add_argument("--mb-verify", action="store_true",
+                   help="MusicBrainz 交叉验证：LLM 校对出的标题/演唱者去权威库查，"
+                        "高分命中用标准值覆盖/补空（默认开启）")
+    p.add_argument("--no-mb-verify", action="store_true",
+                   help="关闭 MusicBrainz 交叉验证")
+    p.add_argument("--mb-min-score", type=float, default=0.85,
+                   help="MB 交叉验证最低分（0~1），默认 0.85")
     p.add_argument("--llm-base-url", default=None,
                    help="大模型 API 地址（OpenAI 兼容），默认取环境变量 MP3ORGANIZER_LLM_BASE_URL，否则为 DeepSeek")
     p.add_argument("--llm-api-key", default=None,
@@ -58,6 +65,14 @@ def _llm_verify_enabled(args: argparse.Namespace) -> bool:
     if getattr(args, "no_llm_verify", False):
         return False
     return bool(getattr(args, "llm", False) or getattr(args, "llm_verify", False))
+
+
+def _mb_verify_enabled(args: argparse.Namespace) -> bool:
+    """MB 交叉验证是否开启：默认开；--no-mb-verify 可关。
+    只在 LLM 校对开启时有意义（验证对象是 LLM 校对结果）。"""
+    if getattr(args, "no_mb_verify", False):
+        return False
+    return _llm_verify_enabled(args)
 
 
 def _llm_config_from_args(args: argparse.Namespace):
@@ -124,7 +139,9 @@ def cmd_fix_tags(args: argparse.Namespace) -> int:
                      force_encoding=args.force_encoding,
                      guess_from_filename=args.guess_from_filename,
                      llm_config=llm_config,
-                     llm_verify=_llm_verify_enabled(args))
+                     llm_verify=_llm_verify_enabled(args),
+                     mb_verify=_mb_verify_enabled(args),
+                     mb_min_score=args.mb_min_score)
         n_fixed += r["status"] in ("fixed", "verified", "guessed")
         records.append({"path": r["path"], "tag_status": r["status"],
                         "tag_changes": r["changes"], "integrity_status": "",
@@ -238,6 +255,9 @@ def cmd_all(args: argparse.Namespace) -> int:
         if phase in ("llm_verify", "llm_classify"):
             print(f"  [大模型 {i}/{total}] {message}")
             return
+        if phase == "mb_verify":
+            print(f"  [MB 交叉验证 {i}/{total}] {message}")
+            return
         if phase in ("tags", "integrity", "organize", "cover"):
             return  # 每个文件只在完成时打印一行
         if phase == "done":
@@ -251,6 +271,8 @@ def cmd_all(args: argparse.Namespace) -> int:
         guess_from_filename=args.guess_from_filename,
         llm_config=_llm_config_from_args(args),
         llm_verify=_llm_verify_enabled(args),
+        mb_verify=_mb_verify_enabled(args),
+        mb_min_score=args.mb_min_score,
         template=args.template, subdir_threshold=args.subdir_threshold,
         fix_streams=not args.no_fix, mp3val_exe=args.mp3val, ffmpeg_exe=args.ffmpeg,
         min_score=args.min_score, report_html=args.report, report_csv=args.report_csv,
@@ -322,6 +344,9 @@ def cmd_merge(args: argparse.Namespace) -> int:
         if phase in ("llm_verify", "llm_classify"):
             print(f"  [大模型 {i}/{total}] {message}")
             return
+        if phase == "mb_verify":
+            print(f"  [MB 交叉验证 {i}/{total}] {message}")
+            return
         if phase in ("tags", "integrity", "organize", "cover"):
             return
         if phase == "done":
@@ -335,6 +360,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
         guess_from_filename=args.guess_from_filename,
         llm_config=_llm_config_from_args(args),
         llm_verify=_llm_verify_enabled(args),
+        mb_verify=_mb_verify_enabled(args),
+        mb_min_score=args.mb_min_score,
         template=args.template, subdir_threshold=args.subdir_threshold,
         merge_mode=True, on_duplicate=args.on_duplicate,
         fix_streams=not args.no_fix, mp3val_exe=args.mp3val, ffmpeg_exe=args.ffmpeg,
